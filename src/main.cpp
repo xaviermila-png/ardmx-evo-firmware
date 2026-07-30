@@ -480,22 +480,30 @@ void markParamsDirty() {
 void loadCanals() {
   prefs.begin("ardmxevo", false);
   const size_t chunkBytes = CHANNEL_CHUNK_SIZE * sizeof(CanalData);
+  Serial.printf("[NVS] loadCanals: chunkBytes=%u sizeof(CanalData)=%u\n", (unsigned)chunkBytes,
+                (unsigned)sizeof(CanalData));
   bool allChunksOk = true;
   for (int chunk = 0; chunk < CHANNEL_CHUNK_COUNT; chunk++) {
     const String key = "chv" + String(chunk);
     void *dest = &canalsData[chunk * CHANNEL_CHUNK_SIZE];
     if (!prefs.isKey(key.c_str())) {
+      Serial.printf("[NVS] loadCanals: clau %s no existeix\n", key.c_str());
       allChunksOk = false;
       break;
     }
     const size_t bytesRead = prefs.getBytes(key.c_str(), dest, chunkBytes);
     if (bytesRead != chunkBytes) {
+      Serial.printf("[NVS] loadCanals: clau %s ha llegit %u bytes (esperava %u)\n", key.c_str(),
+                    (unsigned)bytesRead, (unsigned)chunkBytes);
       allChunksOk = false;
       break;
     }
   }
   if (!allChunksOk) {
+    Serial.println(F("[NVS] loadCanals: algun tros ha fallat, es reinicia tot canalsData a 0"));
     memset(canalsData, 0, sizeof(canalsData));
+  } else {
+    Serial.println(F("[NVS] loadCanals: tots els trossos llegits correctament"));
   }
   prefs.end();
 
@@ -506,20 +514,25 @@ void loadCanals() {
 }
 
 void saveCanals() {
+  Serial.println(F("[NVS] saveCanals: començant..."));
   prefs.begin("ardmxevo", false);
   const size_t chunkBytes = CHANNEL_CHUNK_SIZE * sizeof(CanalData);
   for (int chunk = 0; chunk < CHANNEL_CHUNK_COUNT; chunk++) {
     const String key = "chv" + String(chunk);
     const void *src = &canalsData[chunk * CHANNEL_CHUNK_SIZE];
-    if (prefs.putBytes(key.c_str(), src, chunkBytes) != chunkBytes) {
-      Serial.printf("ERROR desant dades de canal (tros %d)\n", chunk);
+    const size_t written = prefs.putBytes(key.c_str(), src, chunkBytes);
+    if (written != chunkBytes) {
+      Serial.printf("[NVS] ERROR desant dades de canal (tros %d): escrits %u de %u bytes\n", chunk,
+                    (unsigned)written, (unsigned)chunkBytes);
     }
   }
   prefs.end();
   canalsDirty = false;
+  Serial.println(F("[NVS] saveCanals: fet"));
 }
 
 void markCanalsDirty() {
+  Serial.println(F("[NVS] markCanalsDirty"));
   canalsDirty = true;
   lastChangeMillis = millis();
 }
