@@ -103,7 +103,7 @@ constexpr int CHANNEL_BUFFER_SIZE = 512;  // 16 * 32, cobreix MAX_CANALS amb mar
 constexpr int CHANNEL_CHUNK_COUNT = CHANNEL_BUFFER_SIZE / CHANNEL_CHUNK_SIZE;  // 16
 constexpr int DEFAULT_NUMERO_CANALS = 100;  // valor inicial/de fàbrica (com l'ARDMX4 actual)
 
-constexpr uint32_t SAVE_DEBOUNCE_MS = 3000;
+constexpr uint32_t SAVE_DEBOUNCE_MS = 500;
 
 const char *DEFAULT_BLUETOOTH_NAME = "ARDMX4EVO";
 constexpr int MAX_BLUETOOTH_NAME_LENGTH = 12;
@@ -341,7 +341,16 @@ Reproductor *miReproductor;
 // ---------------------------------------------------------------------------
 
 // Aplica directament el valor d'una escena fixa al canal i el transmet.
-void actualizarCanalFix(int i, int escenaIndex) {
+// Rep un "estat" de cicle (0-7: parell=escena fixa, senar=transició), no un
+// índex d'escena directe — tots els punts de crida (NouCicle, CanviEstat,
+// aplicarSelector des d'Escenes()/EstatSelector) passen EstatActual o un
+// valor derivat d'ell sense dividir per 2, igual que feia originalment
+// `actualizarCanalsFix()` al Mega (`valores[EstatActual/2]`). Sense aquesta
+// divisió, l'escena 2 llegia els valors de l'escena 3 i les escenes 3/4
+// llegien fora dels límits de `valors[4]` (mida 4) — confirmat en maquinari
+// real: canviar d'escena barrejava valors d'altres escenes.
+void actualizarCanalFix(int i, int estat) {
+  const int escenaIndex = estat / 2;
   valorActual[i] = canalsData[i].valors[escenaIndex];
   gradient[i] = 0.0;
 }
@@ -1206,6 +1215,15 @@ void handleChannelBulk(const String &rawInput) {
 
     markCanalsDirty();
     markNamesDirty();
+
+    // Si el canal assignat és un dels 3 actualment seleccionats als
+    // sliders (Canal_1/2/3), V[1-3]/V[31-33] queden desactualitzats — i
+    // Escenes(), que segueix corrent contínuament mentre V[50]==4 (aquesta
+    // pantalla hi és mapejada), detectaria V[1] com "l'usuari ha mogut
+    // l'slider" i sobreescriuria el valor que acabem d'importar amb
+    // l'antic. Mateix bug (i mateixa solució) que ARDMX4.ino's
+    // handleChannelBulk() amb V63.
+    RecuperarValorsCanals();
   }
 
   const CanalData &c = canalsData[channel - 1];
