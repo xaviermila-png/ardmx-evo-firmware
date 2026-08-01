@@ -2,8 +2,38 @@
   ARDMX4 EVO — firmware ESP32
   Equivalent funcional de l'ARDMX4 (Arduino Mega): controlador DMX512 amb 4
   escenes i transicions, cicle sincronitzat amb música MP3 (DFPlayer Mini),
-  controlat per Bluetooth Classic (SPP) amb el mateix protocol de trames
-  `!Vxx=valor$` / `!Vxx=?$` que ja fan servir l'ARDMX4 i l'ARDMX One.
+  controlat per BLE (GATT) amb el mateix protocol de trames `!Vxx=valor$` /
+  `!Vxx=?$` que ja fan servir l'ARDMX4 i l'ARDMX One.
+
+  Migrat de Bluetooth Classic (SPP) a BLE (2026-08) — rèplica exacta del
+  mateix canvi ja fet i validat en maquinari a ardmx-one-firmware (Classic no
+  és accessible des d'apps de tercers a iOS sense certificació MFi, BLE sí).
+  El Mega (ardmx4-firmware) es manté amb Classic/HC-06, sense tocar.
+
+  Disseny GATT — deliberadament els MATEIXOS UUIDs que ardmx-one-firmware,
+  no uns de nous: és el mateix transport per al mateix protocol `!Vxx=
+  valor$`, i el producte ja es distingeix pel handshake V64/nom un cop
+  connectat (vegeu DeviceIdentificationService a l'app), no pel transport en
+  si — reutilitzar-los permet que l'app trobi tots dos productes en el
+  mateix escaneig BLE sense cap canvi a l'app.
+    - Servei: 74fdf89b-a063-48f4-837d-03462d2b3687
+    - Característica d'escriptura (Write + Write Without Response):
+      c7e05764-94cb-4a2f-8cd4-4751163c58ad
+    - Característica de notificació: dd2a9ece-4964-4f42-b986-36719d38b2a3
+
+  NimBLE-Arduino (no la llibreria BLE del core, basada en Bluedroid): molt
+  més lleugera en flash/RAM i més fiable en notificacions llargues — mateix
+  motiu que a l'ARDMX One, encara més rellevant aquí perquè aquest firmware
+  ja anava justet de flash (87% amb BluetoothSerial) abans de migrar.
+
+  Fragmentació per MTU i concurrència: idèntic a ardmx-one-firmware —
+  sendFrame() fragmenta les respostes llargues (V69, V71) en trossos de mida
+  MTU; els bytes rebuts per BLE (tasca pròpia de l'stack, no loop()) es
+  passen per una cua FreeRTOS (bleRxQueue) perquè processFrame()/
+  handleWrite() i tota la resta d'estat global (V[], canalsData...) seguint
+  tocant-se només des de loop(), mai des del callback onWrite() — encara més
+  important aquí que a l'ARDMX One, ja que l'estat de cicle/escenes d'aquest
+  firmware és molt més gran i una condició de carrera hi seria molt pitjor.
 
   La lògica de cicle/escenes/transicions (NouCicle, CanviEstat,
   AvancarCicleSiCal, cridaTransicio, GravacioIntervals...) i la gestió del
@@ -70,7 +100,9 @@
 // qualsevol funció que hi escrigui.
 SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
-#include "BluetoothSerial.h"
+#include <NimBLEDevice.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 #include <Preferences.h>
 #include <DFRobotDFPlayerMini.h>
 
@@ -118,11 +150,33 @@ const char *IDENTIFY_JSON =
     "{\"tipus\":\"ARDMX4_EVO\",\"firmware\":\"1.0.0\",\"num_canals_max\":510}";
 
 // ---------------------------------------------------------------------------
+// Configuració BLE — mateixos UUIDs que ardmx-one-firmware, deliberadament
+// (vegeu el comentari de capçalera).
+// ---------------------------------------------------------------------------
+
+constexpr const char *BLE_SERVICE_UUID = "74fdf89b-a063-48f4-837d-03462d2b3687";
+constexpr const char *BLE_WRITE_CHAR_UUID = "c7e05764-94cb-4a2f-8cd4-4751163c58ad";
+constexpr const char *BLE_NOTIFY_CHAR_UUID = "dd2a9ece-4964-4f42-b986-36719d38b2a3";
+
+constexpr uint16_t BLE_PREFERRED_MTU = 247;
+constexpr size_t BLE_RX_CHUNK_MAX = 256;
+
+struct BleRxChunk {
+  uint8_t data[BLE_RX_CHUNK_MAX];
+  size_t length;
+};
+
+// ---------------------------------------------------------------------------
 // Estat global
 // ---------------------------------------------------------------------------
 
-BluetoothSerial SerialBT;
 Preferences prefs;
+
+NimBLEServer *bleServer = nullptr;
+NimBLECharacteristic *bleNotifyCharacteristic = nullptr;
+QueueHandle_t bleRxQueue = nullptr;
+volatile bool bleClientConnected = false;
+volatile uint16_t bleConnHandle = BLE_HS_CONN_HANDLE_NONE;
 // UART2, no UART1: el DMX (esp_dmx) reclama DMX_NUM_1 (el mateix
 // perifèric UART1) — provar d'inicialitzar-hi també el DFPlayer amb
 // HardwareSerial(1) petava (Guru Meditation Error / LoadProhibited dins
@@ -1130,24 +1184,50 @@ void ConfiguracioParametres() {
 // Protocol `!Vxx=valor$` / `!Vxx=?$`
 // ---------------------------------------------------------------------------
 
+// Envia una trama completa per BLE, fragmentada en trossos de com a màxim
+// el MTU negociat amb el client actual — mateixa lògica que
+// ardmx-one-firmware's pròpia sendFrame(), vegeu el comentari de capçalera
+// d'aquest fitxer.
+void sendFrame(const String &frame) {
+  if (!bleClientConnected || bleNotifyCharacteristic == nullptr) return;
+
+  const uint16_t mtu = bleServer != nullptr
+      ? bleServer->getPeerMTU(bleConnHandle)
+      : 0;
+  const size_t chunkSize = (mtu > 23) ? (size_t)(mtu - 3) : 20;
+
+  const size_t len = frame.length();
+  size_t offset = 0;
+  while (offset < len) {
+    const size_t n = min(len - offset, chunkSize);
+    bleNotifyCharacteristic->setValue(
+        (const uint8_t *)frame.c_str() + offset, n);
+    bleNotifyCharacteristic->notify();
+    offset += n;
+  }
+}
+
 void replyNumber(int index, float value) {
-  SerialBT.print('!');
-  SerialBT.print('V');
-  if (index < 10) SerialBT.print('0');
-  SerialBT.print(index);
-  SerialBT.print('=');
-  SerialBT.print(value);
-  SerialBT.print('$');
+  String frame = "!V";
+  if (index < 10) frame += '0';
+  frame += index;
+  frame += '=';
+  // String(value, 2): mateix format que SerialBT.print(float) feia servir
+  // per defecte (2 decimals) — es manté igual per no canviar res del que
+  // l'app espera rebre.
+  frame += String(value, 2);
+  frame += '$';
+  sendFrame(frame);
 }
 
 void replyText(int index, const char *text) {
-  SerialBT.print('!');
-  SerialBT.print('V');
-  if (index < 10) SerialBT.print('0');
-  SerialBT.print(index);
-  SerialBT.print('=');
-  SerialBT.print(text);
-  SerialBT.print('$');
+  String frame = "!V";
+  if (index < 10) frame += '0';
+  frame += index;
+  frame += '=';
+  frame += text;
+  frame += '$';
+  sendFrame(frame);
 }
 
 void handleNameChange(const String &rawInput) {
@@ -1303,19 +1383,94 @@ void processFrame(const String &body) {
   }
 }
 
-void pollBluetooth() {
-  while (SerialBT.available()) {
-    const char c = (char)SerialBT.read();
-    if (c == '!') {
-      btFrameBuffer = "";
-    } else if (c == '$') {
-      processFrame(btFrameBuffer);
-      btFrameBuffer = "";
-    } else {
-      btFrameBuffer += c;
-      if (btFrameBuffer.length() > 512) btFrameBuffer = "";
+// Alimenta UN byte a l'acumulador de trames — abans el cos del while() de
+// pollBluetooth(), ara cridat des de drainBleRxQueue() per cada byte rebut
+// per BLE.
+void feedByte(char c) {
+  if (c == '!') {
+    btFrameBuffer = "";
+  } else if (c == '$') {
+    processFrame(btFrameBuffer);
+    btFrameBuffer = "";
+  } else {
+    btFrameBuffer += c;
+    if (btFrameBuffer.length() > 512) btFrameBuffer = "";
+  }
+}
+
+// Buida la cua de trossos rebuts per BLE (omplerta pel callback onWrite(),
+// que corre a la tasca de l'stack BLE, no a loop()) i alimenta cada byte a
+// feedByte() — aquí, dins loop(), és on realment es crida processFrame()/
+// handleWrite() i es toca tot l'estat global (V[], canalsData...), mai
+// directament des del callback (vegeu el comentari de capçalera
+// "Concurrència").
+void drainBleRxQueue() {
+  BleRxChunk chunk;
+  while (xQueueReceive(bleRxQueue, &chunk, 0) == pdTRUE) {
+    for (size_t i = 0; i < chunk.length; i++) {
+      feedByte((char)chunk.data[i]);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Callbacks de NimBLE — s'executen a la tasca de l'stack BLE, no a loop().
+// NimBLE-Arduino 1.4.x fa servir ble_gap_conn_desc* en aquests callbacks
+// (no NimBLEConnInfo&, que és de la 2.x) — confirmat compilant contra la
+// versió que resol aquest platformio.ini, mateixa troballa que a
+// ardmx-one-firmware.
+// ---------------------------------------------------------------------------
+
+class ServerCallbacks : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer *server, ble_gap_conn_desc *desc) override {
+    bleClientConnected = true;
+    bleConnHandle = desc->conn_handle;
+  }
+
+  void onDisconnect(NimBLEServer *server, ble_gap_conn_desc *desc) override {
+    bleClientConnected = false;
+    bleConnHandle = BLE_HS_CONN_HANDLE_NONE;
+    NimBLEDevice::startAdvertising();
+  }
+};
+
+class WriteCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *characteristic,
+               ble_gap_conn_desc *desc) override {
+    const std::string value = characteristic->getValue();
+    size_t offset = 0;
+    while (offset < value.size()) {
+      BleRxChunk chunk;
+      chunk.length = min(value.size() - offset, BLE_RX_CHUNK_MAX);
+      memcpy(chunk.data, value.data() + offset, chunk.length);
+      xQueueSend(bleRxQueue, &chunk, 0);
+      offset += chunk.length;
+    }
+  }
+};
+
+void bleInit() {
+  NimBLEDevice::init(btDeviceName.c_str());
+  NimBLEDevice::setMTU(BLE_PREFERRED_MTU);
+
+  bleServer = NimBLEDevice::createServer();
+  bleServer->setCallbacks(new ServerCallbacks());
+
+  NimBLEService *service = bleServer->createService(BLE_SERVICE_UUID);
+
+  NimBLECharacteristic *writeCharacteristic = service->createCharacteristic(
+      BLE_WRITE_CHAR_UUID,
+      NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+  writeCharacteristic->setCallbacks(new WriteCallbacks());
+
+  bleNotifyCharacteristic = service->createCharacteristic(
+      BLE_NOTIFY_CHAR_UUID, NIMBLE_PROPERTY::NOTIFY);
+
+  service->start();
+
+  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+  advertising->addServiceUUID(BLE_SERVICE_UUID);
+  advertising->start();
 }
 
 // ---------------------------------------------------------------------------
@@ -1338,7 +1493,8 @@ void setup() {
   dfSerial.begin(9600, SERIAL_8N1, /*RX=*/16, /*TX=*/17);
   miReproductor = new Reproductor(dfSerial);
 
-  SerialBT.begin(btDeviceName.c_str());
+  bleRxQueue = xQueueCreate(8, sizeof(BleRxChunk));
+  bleInit();
 
   InicialitzarPrograma();
 
@@ -1378,7 +1534,7 @@ void setup() {
 }
 
 void loop() {
-  pollBluetooth();
+  drainBleRxQueue();
   AjustVolum();
   GestioDFPlayer();
   actualitzarModeLed();
