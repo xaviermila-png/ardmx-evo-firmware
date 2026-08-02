@@ -667,7 +667,7 @@ String sanitizeName(const String &rawInput) {
   String clean = "";
   for (unsigned int i = 0; i < rawInput.length(); i++) {
     const char c = rawInput.charAt(i);
-    if (isAlphaNumeric(c)) clean += c;
+    if (isAlphaNumeric(c) || c == '_') clean += c;
     if ((int)clean.length() >= MAX_BLUETOOTH_NAME_LENGTH) break;
   }
   return clean;
