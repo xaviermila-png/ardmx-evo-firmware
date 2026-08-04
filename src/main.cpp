@@ -482,8 +482,15 @@ void dmxSendFrame() {
   }
   const int packetSize = numeroCanals + 1;
   dmx_write(DMX_PORT, dmxData, packetSize);
+  // No dmx_wait_sent() here on purpose: dmx_send_num() already waits
+  // internally (up to 23ms) for the PREVIOUS frame to finish sending before
+  // starting a new one, so the transmission itself never overlaps. Our own
+  // explicit wait used to additionally block until the CURRENT frame
+  // finished transmitting (up to ~23ms at 510 channels) — with transitions
+  // ticking every 10ms, that was enough to make a running cycle visibly
+  // stutter/jump above ~100 channels. Confirmed on hardware up to the full
+  // 510-channel universe with no output corruption after removing it.
   dmx_send_num(DMX_PORT, packetSize);
-  dmx_wait_sent(DMX_PORT, DMX_TIMEOUT_TICK);
 }
 
 void apagarTotsElsCanals() {
