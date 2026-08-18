@@ -1,7 +1,7 @@
-ARDMX4 EVO — instal·lador de firmware
+ARDMX EVO — instal·lador de firmware
 =======================================
 
-Aquest paquet instal·la el firmware de l'ARDMX4 EVO a una placa ESP32,
+Aquest paquet instal·la el firmware de l'ARDMX EVO a una placa ESP32,
 sense necessitat de tenir res més instal·lat (ni Python, ni PlatformIO,
 ni Arduino IDE).
 
@@ -14,7 +14,7 @@ Passos
    IMPORTANT: el cable ha de ser de dades, no només de càrrega.
 
 3. Dins la carpeta descomprimida, fes doble clic a:
-       install_ardmx4_evo.bat
+       install_ardmx_evo.bat
 
 4. S'obrirà una finestra negra (símbol del sistema). Mostrarà els ports
    COM disponibles i, si detecta l'ESP32, en recomanarà un

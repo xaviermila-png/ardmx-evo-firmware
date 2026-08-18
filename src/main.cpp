@@ -1,5 +1,5 @@
 /*
-  ARDMX4 EVO — firmware ESP32
+  ARDMX EVO — firmware ESP32
   Equivalent funcional de l'ARDMX4 (Arduino Mega): controlador DMX512 amb 4
   escenes i transicions, cicle sincronitzat amb música MP3 (DFPlayer Mini),
   controlat per BLE (GATT) amb el mateix protocol de trames `!Vxx=valor$` /
@@ -137,17 +137,17 @@ constexpr int DEFAULT_NUMERO_CANALS = 100;  // valor inicial/de fàbrica (com l'
 
 constexpr uint32_t SAVE_DEBOUNCE_MS = 500;
 
-const char *DEFAULT_BLUETOOTH_NAME = "ARDMX4EVO";
+const char *DEFAULT_BLUETOOTH_NAME = "ARDMXEVO";
 constexpr int MAX_BLUETOOTH_NAME_LENGTH = 15;
 
 constexpr int MAX_CHANNEL_NAME_LENGTH = 15;
 constexpr int MAX_PESSEBE_NAME_LENGTH = 96;
 constexpr int MAX_DESCRIPTION_LENGTH = 384;
 
-const char *FIRMWARE_VERSION_TEXT = "ARDMX4 EVO v1.0";
+const char *FIRMWARE_VERSION_TEXT = "ARDMX EVO v1.0";
 
 const char *IDENTIFY_JSON =
-    "{\"tipus\":\"ARDMX4_EVO\",\"firmware\":\"1.0.0\",\"num_canals_max\":510}";
+    "{\"tipus\":\"ARDMX_EVO\",\"firmware\":\"1.0.0\",\"num_canals_max\":510}";
 
 // ---------------------------------------------------------------------------
 // Configuració BLE — mateixos UUIDs que ardmx-one-firmware, deliberadament
@@ -1537,7 +1537,7 @@ void setup() {
   V[41] = 0;
   actualitzarModeLed();
 
-  Serial.println(F("ARDMX4 EVO iniciat"));
+  Serial.println(F("ARDMX EVO iniciat"));
 }
 
 void loop() {

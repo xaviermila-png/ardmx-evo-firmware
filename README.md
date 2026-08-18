@@ -1,4 +1,4 @@
-# ARDMX4 EVO — firmware ESP32
+# ARDMX EVO — firmware ESP32
 
 Equivalent funcional de l'[ARDMX4](https://github.com/xaviermila-png/ardmx4-firmware)
 (Arduino Mega) amb un cor **ESP32**, reduint cost i afegint Bluetooth i persistència
@@ -35,7 +35,7 @@ haver d'obrir el projecte ni compilar res (mateix patró que
 - **`installer/`** — versió lleugera que reutilitza el Python/`esptool.py` que
   ja porta PlatformIO instal·lat en aquest ordinador.
 
-Dona doble clic a `install_ardmx4_evo.bat`, escriu el port COM de l'ESP32 i
+Dona doble clic a `install_ardmx_evo.bat`, escriu el port COM de l'ESP32 i
 prem Enter.
 
 **Què fa exactament** — a diferència de l'ARDMX One, aquest firmware **no fa

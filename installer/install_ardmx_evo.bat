@@ -1,18 +1,27 @@
 @echo off
 setlocal enabledelayedexpansion
-title Instal-lador de firmware ARDMX4 EVO
+title Instal-lador de firmware ARDMX EVO
 
 echo ============================================
-echo   Instal-lador de firmware - ARDMX4 EVO
-echo   (versio autonoma, no cal res mes instalat)
+echo   Instal-lador de firmware - ARDMX EVO
 echo ============================================
 echo.
 
-set "ESPTOOL=%~dp0esptool.exe"
+set "PIO_PYTHON=%USERPROFILE%\.platformio\penv\Scripts\python.exe"
+set "ESPTOOL=%USERPROFILE%\.platformio\packages\tool-esptoolpy\esptool.py"
 set "BINDIR=%~dp0bin"
 
+if not exist "%PIO_PYTHON%" (
+    echo ERROR: no s'ha trobat el Python de PlatformIO a:
+    echo   %PIO_PYTHON%
+    echo Aquest instal-lador, de moment, nomes funciona en un ordinador
+    echo amb PlatformIO instal-lat.
+    goto :fi
+)
+
 if not exist "%ESPTOOL%" (
-    echo ERROR: no es troba esptool.exe al costat d'aquest script.
+    echo ERROR: no s'ha trobat esptool.py a:
+    echo   %ESPTOOL%
     goto :fi
 )
 
@@ -48,9 +57,9 @@ echo.
 echo Flashejant %COMPORT%... no desendollis el cable.
 echo.
 
-"%ESPTOOL%" --chip esp32 --port %COMPORT% --baud 460800 ^
-    --before default-reset --after hard-reset write-flash ^
-    --flash-mode dio --flash-freq 40m --flash-size detect ^
+"%PIO_PYTHON%" "%ESPTOOL%" --chip esp32 --port %COMPORT% --baud 460800 ^
+    --before default_reset --after hard_reset write_flash -z ^
+    --flash_mode dio --flash_freq 40m --flash_size detect ^
     0x1000 "%BINDIR%\bootloader.bin" ^
     0x8000 "%BINDIR%\partitions.bin" ^
     0x20000 "%BINDIR%\firmware.bin"
