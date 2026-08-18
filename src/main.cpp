@@ -138,7 +138,7 @@ constexpr int DEFAULT_NUMERO_CANALS = 100;  // valor inicial/de fàbrica (com l'
 constexpr uint32_t SAVE_DEBOUNCE_MS = 500;
 
 const char *DEFAULT_BLUETOOTH_NAME = "ARDMX4EVO";
-constexpr int MAX_BLUETOOTH_NAME_LENGTH = 12;
+constexpr int MAX_BLUETOOTH_NAME_LENGTH = 15;
 
 constexpr int MAX_CHANNEL_NAME_LENGTH = 15;
 constexpr int MAX_PESSEBE_NAME_LENGTH = 96;
