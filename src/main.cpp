@@ -146,8 +146,25 @@ constexpr int MAX_DESCRIPTION_LENGTH = 384;
 
 const char *FIRMWARE_VERSION_TEXT = "ARDMX EVO v1.0";
 
-const char *IDENTIFY_JSON =
-    "{\"tipus\":\"ARDMX_EVO\",\"firmware\":\"1.0.0\",\"num_canals_max\":510}";
+// PIN de connexió — opcional (String buida = desactivat, comportament de
+// sempre). Quan n'hi ha un, cap V/T es contesta ni s'aplica (V64, V73, V75
+// són les úniques excepcions) fins que l'app l'enviï correcte per V73. Es
+// desa en clar a NVS (com el nom Bluetooth): no protegeix contra algú amb
+// accés físic a la placa, només contra connectar-se sense voler al dispositiu
+// del veí en una trobada de pessebristes — no cal xifrar-lo per a això.
+constexpr int PIN_LENGTH = 4;
+String storedPin = "";
+bool pinAuthenticated = false;
+
+// El JSON d'identificació (V64) ara inclou si cal PIN, així que ja no és
+// una constant fixa — es construeix a cada petició.
+String buildIdentifyJson() {
+  String json = "{\"tipus\":\"ARDMX_EVO\",\"firmware\":\"1.0.0\",";
+  json += "\"num_canals_max\":510,\"pin\":";
+  json += (storedPin.length() > 0) ? "true" : "false";
+  json += "}";
+  return json;
+}
 
 // ---------------------------------------------------------------------------
 // Configuració BLE — mateixos UUIDs que ardmx-one-firmware, deliberadament
@@ -666,6 +683,12 @@ void loadBtName() {
   prefs.end();
 }
 
+void loadPin() {
+  prefs.begin("ardmxevo", false);
+  storedPin = prefs.getString("pin", "");
+  prefs.end();
+}
+
 // ---------------------------------------------------------------------------
 // Sanejament de text
 // ---------------------------------------------------------------------------
@@ -677,6 +700,18 @@ String sanitizeName(const String &rawInput) {
     if (isAlphaNumeric(c) || c == '_') clean += c;
     if ((int)clean.length() >= MAX_BLUETOOTH_NAME_LENGTH) break;
   }
+  return clean;
+}
+
+// Només xifres, exactament PIN_LENGTH — qualsevol altra cosa (buit, massa
+// curt, no numèric) es considera invàlida (String buida de retorn).
+String sanitizePin(const String &rawInput) {
+  String clean = "";
+  for (unsigned int i = 0; i < rawInput.length(); i++) {
+    const char c = rawInput.charAt(i);
+    if (isDigit(c)) clean += c;
+  }
+  if (clean.length() != PIN_LENGTH) return "";
   return clean;
 }
 
@@ -1252,6 +1287,43 @@ void handleNameChange(const String &rawInput) {
   ESP.restart();
 }
 
+// V73: l'app hi envia el PIN per autenticar-se just després de connectar.
+// Sempre es processa (encara que ja calgui PIN i no s'hagi enviat encara),
+// és precisament l'única manera d'arribar a autenticar-se.
+void handlePinVerify(const String &rawInput) {
+  const String attempt = sanitizePin(rawInput);
+  pinAuthenticated = storedPin.length() > 0 && attempt == storedPin;
+  replyText(73, pinAuthenticated ? "OK" : "ERROR");
+}
+
+// V74: posar/canviar el PIN — només té efecte si ja estàs autenticat (o si
+// encara no hi havia cap PIN, cas en què "autenticat" ja és cert per
+// definició, vegeu la comprovació al capdamunt de processFrame()).
+void handlePinSet(const String &rawInput) {
+  const String clean = sanitizePin(rawInput);
+  if (clean.length() == 0) return;
+
+  prefs.begin("ardmxevo", false);
+  prefs.putString("pin", clean);
+  prefs.end();
+
+  storedPin = clean;
+  replyText(74, "OK");
+}
+
+// V75: restableix el PIN (torna a "sense PIN"). Sempre s'accepta,
+// independentment de pinAuthenticated — vegeu el comentari de storedPin
+// sobre per què això és acceptable per l'amenaça real que es vol evitar.
+void handlePinReset(const String &rawInput) {
+  prefs.begin("ardmxevo", false);
+  prefs.remove("pin");
+  prefs.end();
+
+  storedPin = "";
+  pinAuthenticated = false;
+  replyText(75, "OK");
+}
+
 void handleChannelNameChange(int index, const String &rawInput) {
   const int slot = index - 65;
   const int channel = (slot == 0) ? Canal_1 : (slot == 1) ? Canal_2 : Canal_3;
@@ -1341,7 +1413,7 @@ void handleRequest(int index) {
       replyText(63, btDeviceName.c_str());
       break;
     case 64:
-      replyText(64, IDENTIFY_JSON);
+      replyText(64, buildIdentifyJson().c_str());
       break;
     case 65:
     case 66:
@@ -1370,6 +1442,13 @@ void processFrame(const String &body) {
   const int index = body.substring(1, eq).toInt();
   const String rhs = body.substring(eq + 1);
 
+  // Mentre calgui PIN i encara no s'hagi enviat el correcte, només es
+  // processen V64 (identificació — cal per saber que fa falta PIN), V73
+  // (verificar-lo) i V75 (restablir-lo) — tota la resta es descarta en
+  // silenci, tant lectures (més avall) com escriptures.
+  const bool gated = storedPin.length() > 0 && !pinAuthenticated;
+  if (gated && index != 64 && index != 73 && index != 75) return;
+
   if (rhs == "?") {
     handleRequest(index);
     return;
@@ -1385,6 +1464,12 @@ void processFrame(const String &body) {
     handleDescriptionChange(rhs);
   } else if (index == 71) {
     handleChannelBulk(rhs);
+  } else if (index == 73) {
+    handlePinVerify(rhs);
+  } else if (index == 74) {
+    handlePinSet(rhs);
+  } else if (index == 75) {
+    handlePinReset(rhs);
   } else {
     handleWrite(index, rhs.toFloat());
   }
@@ -1432,6 +1517,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *server, ble_gap_conn_desc *desc) override {
     bleClientConnected = true;
     bleConnHandle = desc->conn_handle;
+    pinAuthenticated = false;
   }
 
   void onDisconnect(NimBLEServer *server, ble_gap_conn_desc *desc) override {
@@ -1495,6 +1581,7 @@ void setup() {
   loadCanals();
   loadNames();
   loadBtName();
+  loadPin();
 
   dmxInit();
   dfSerial.begin(9600, SERIAL_8N1, /*RX=*/16, /*TX=*/17);
