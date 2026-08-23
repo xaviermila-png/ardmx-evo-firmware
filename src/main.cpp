@@ -273,9 +273,19 @@ struct CanalData {
 CanalData canalsData[CHANNEL_BUFFER_SIZE];
 float valorActual[CHANNEL_BUFFER_SIZE];  // valor DMX que s'està enviant ara mateix (per la interpolació)
 bool canalsDirty = false;
+// Quins dels 16 trossos NVS tenen canvis pendents — editar UN canal (p.ex.
+// arrossegar un slider o canviar-li la transició) només toca 1-2 trossos,
+// pero saveCanals() reescrivia sempre els 16 sencers a cada desat
+// debounced. Cada escriptura NVS bloqueja loop()/DMX uns ms; amb
+// SAVE_DEBOUNCE_MS tan curt (500ms) i 16 trossos sencers a cada desat, un
+// simple ús normal (moure sliders, canviar transicions) es notava com un
+// petit "encallament" periòdic. Ara saveCanals()/saveNames() només
+// reescriuen els trossos marcats aquí (mateix mecanisme a ardmx-one-firmware).
+bool canalsChunkDirty[CHANNEL_CHUNK_COUNT] = {false};
 
 char channelNames[CHANNEL_BUFFER_SIZE][MAX_CHANNEL_NAME_LENGTH + 1];
 bool namesDirty = false;
+bool namesChunkDirty[CHANNEL_CHUNK_COUNT] = {false};
 
 String pessebeName;
 String descripcio;
@@ -334,8 +344,8 @@ String btFrameBuffer;
 String btDeviceName;
 
 // Declaracions avançades (definides més avall, calen per l'ordre de crida)
-void markCanalsDirty();
-void markNamesDirty();
+void markCanalsDirty(int channelIndex0);
+void markNamesDirty(int channelIndex0 = -1);
 void markParamsDirty();
 void replyText(int index, const char *text);
 
@@ -493,7 +503,7 @@ void guardarEnviarValor(int i, int escenaIndex, int nuevoValor) {
   if (escenaIndex < 0 || escenaIndex >= 4) return;
   canalsData[i].valors[escenaIndex] = constrain(nuevoValor, 0, 255);
   valorActual[i] = canalsData[i].valors[escenaIndex];
-  markCanalsDirty();
+  markCanalsDirty(i);
 }
 
 // ---------------------------------------------------------------------------
@@ -622,6 +632,7 @@ void saveCanals() {
   prefs.begin("ardmxevo", false);
   const size_t chunkBytes = CHANNEL_CHUNK_SIZE * sizeof(CanalData);
   for (int chunk = 0; chunk < CHANNEL_CHUNK_COUNT; chunk++) {
+    if (!canalsChunkDirty[chunk]) continue;
     const String key = "chv" + String(chunk);
     const void *src = &canalsData[chunk * CHANNEL_CHUNK_SIZE];
     const size_t written = prefs.putBytes(key.c_str(), src, chunkBytes);
@@ -629,16 +640,27 @@ void saveCanals() {
       Serial.printf("[NVS] ERROR desant dades de canal (tros %d): escrits %u de %u bytes\n", chunk,
                     (unsigned)written, (unsigned)chunkBytes);
     }
+    canalsChunkDirty[chunk] = false;
   }
   prefs.end();
   canalsDirty = false;
   Serial.println(F("[NVS] saveCanals: fet"));
 }
 
-void markCanalsDirty() {
+// channelIndex0 (0-based): marca només el tros que conté aquest canal com a
+// pendent (vegeu canalsChunkDirty[]) — un simple canvi d'1 canal ja no força
+// reescriure els 16 trossos sencers.
+void markCanalsDirty(int channelIndex0) {
   Serial.println(F("[NVS] markCanalsDirty"));
+  canalsChunkDirty[channelIndex0 / CHANNEL_CHUNK_SIZE] = true;
   canalsDirty = true;
   lastChangeMillis = millis();
+}
+
+// Només per a un reset de fàbrica (memset complet, cal reescriure-ho tot).
+void markAllCanalsDirty() {
+  for (int i = 0; i < CHANNEL_CHUNK_COUNT; i++) canalsChunkDirty[i] = true;
+  canalsDirty = true;
 }
 
 void loadNames() {
@@ -672,11 +694,13 @@ void saveNames() {
   prefs.begin("ardmxevo", false);
   const size_t chunkBytes = CHANNEL_CHUNK_SIZE * (MAX_CHANNEL_NAME_LENGTH + 1);
   for (int chunk = 0; chunk < CHANNEL_CHUNK_COUNT; chunk++) {
+    if (!namesChunkDirty[chunk]) continue;
     const String key = "chn" + String(chunk);
     const char *src = &channelNames[chunk * CHANNEL_CHUNK_SIZE][0];
     if (prefs.putBytes(key.c_str(), src, chunkBytes) != chunkBytes) {
       Serial.printf("ERROR desant noms de canal (tros %d)\n", chunk);
     }
+    namesChunkDirty[chunk] = false;
   }
   if (prefs.putString("pessebe", pessebeName) == 0 && pessebeName.length() > 0) {
     Serial.println(F("ERROR desant el nom del pessebre"));
@@ -688,9 +712,18 @@ void saveNames() {
   namesDirty = false;
 }
 
-void markNamesDirty() {
+// channelIndex0 (0-based, -1 = pessebeName/descripcio, que no viuen en cap
+// tros i saveNames() sempre reescriu igualment): mateix mecanisme que
+// markCanalsDirty().
+void markNamesDirty(int channelIndex0) {
+  if (channelIndex0 >= 0) namesChunkDirty[channelIndex0 / CHANNEL_CHUNK_SIZE] = true;
   namesDirty = true;
   lastChangeMillis = millis();
+}
+
+void markAllNamesDirty() {
+  for (int i = 0; i < CHANNEL_CHUNK_COUNT; i++) namesChunkDirty[i] = true;
+  namesDirty = true;
 }
 
 void loadBtName() {
@@ -1180,11 +1213,13 @@ void performFactoryReset() {
   for (int i = 0; i < CHANNEL_BUFFER_SIZE; i++) {
     valorActual[i] = 0;
   }
+  markAllCanalsDirty();
   saveCanals();
 
   memset(channelNames, 0, sizeof(channelNames));
   pessebeName = "";
   descripcio = "";
+  markAllNamesDirty();
   saveNames();
 
   Serial.println(F("Reset de fàbrica complet."));
@@ -1334,7 +1369,7 @@ void handleChannelNameChange(int index, const String &rawInput) {
   const int channel = (slot == 0) ? Canal_1 : (slot == 1) ? Canal_2 : Canal_3;
   const String clean = sanitizeText(rawInput, MAX_CHANNEL_NAME_LENGTH);
   clean.toCharArray(channelNames[channel - 1], MAX_CHANNEL_NAME_LENGTH + 1);
-  markNamesDirty();
+  markNamesDirty(channel - 1);
   replyText(index, channelNames[channel - 1]);
 }
 
@@ -1389,8 +1424,8 @@ void handleChannelBulk(const String &rawInput) {
     }
     nom.toCharArray(channelNames[channel - 1], MAX_CHANNEL_NAME_LENGTH + 1);
 
-    markCanalsDirty();
-    markNamesDirty();
+    markCanalsDirty(channel - 1);
+    markNamesDirty(channel - 1);
 
     // Si el canal assignat és un dels 3 actualment seleccionats als
     // sliders (Canal_1/2/3), V[1-3] queda desactualitzat — i Escenes(), que
@@ -1728,10 +1763,19 @@ void loop() {
     }
   }
 
-  // Desats amb debounce
-  if (paramsDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) saveParams();
-  if (canalsDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) saveCanals();
-  if (namesDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) saveNames();
+  // Desats amb debounce — com a màxim UN per volta (else if): cada desat ja
+  // bloqueja loop()/DMX uns ms mentre escriu a flash, i com que
+  // paramsDirty/canalsDirty/namesDirty comparteixen el mateix
+  // lastChangeMillis, més d'un podia arribar dirty alhora (p.ex. V71 marca
+  // canalsDirty i namesDirty juntes) i apilar-se en un sol bloqueig llarg
+  // dins la mateixa volta — mateix motiu que a ardmx-one-firmware.
+  if (paramsDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
+    saveParams();
+  } else if (canalsDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
+    saveCanals();
+  } else if (namesDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
+    saveNames();
+  }
 
   // Enviament DMX limitat en freqüència
   static uint32_t lastDmxSendMillis = 0;
