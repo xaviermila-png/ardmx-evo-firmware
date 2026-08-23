@@ -210,6 +210,44 @@ HardwareSerial dfSerial(2);
 constexpr int V_SIZE = 60;
 float V[V_SIZE];
 
+// ---- Transicions globals (substitueixen el mode per canal 0/1/2) ----
+// Cada transició s'aplica a TOTS els canals alhora durant el pas d'escena
+// i+1 -> ((i+1)%4)+1. SALT és l'únic tipus que fa servir saltPercent
+// (percentatge del temps de la transició en què es produeix el salt
+// instantani); la resta l'ignoren.
+enum TipusTransicio : uint8_t { LINEAL = 0, SALT = 1, EASE_IN = 2, EASE_OUT = 3 };
+
+struct Transicio {
+  TipusTransicio tipus;
+  uint8_t saltPercent;  // 0-100, només rellevant si tipus==SALT
+};
+
+// Interpola el valor (0-255) d'un canal entre l'escena origen (v0) i destí
+// (v1) segons el progrés de la transició (t_pct, 0-1000 mil·lèsimes). Tot en
+// enters (sense floats) per eficiència a l'ESP32.
+uint8_t interpolar(uint8_t v0, uint8_t v1, uint16_t t_pct, TipusTransicio tipus, uint8_t salt_pct) {
+  switch (tipus) {
+    case SALT:
+      return (t_pct < (uint16_t)salt_pct * 10) ? v0 : v1;
+    case EASE_OUT: {
+      // Ràpid al principi, s'alenteix al final: f(t) = 1-(1-t)^2
+      int32_t inv = 1000 - (int32_t)t_pct;
+      int32_t f = 1000 - (inv * inv) / 1000;
+      return (uint8_t)(v0 + ((int32_t)(v1 - v0) * f) / 1000);
+    }
+    case EASE_IN: {
+      // Lent al principi, accelera al final: f(t) = t^2
+      int32_t f = ((int32_t)t_pct * t_pct) / 1000;
+      return (uint8_t)(v0 + ((int32_t)(v1 - v0) * f) / 1000);
+    }
+    case LINEAL:
+    default:
+      return (uint8_t)(v0 + ((int32_t)(v1 - v0) * t_pct) / 1000);
+  }
+}
+
+Transicio transicions[4];  // transicions[i]: escena i+1 -> escena ((i+1)%4)+1
+
 // ---- Paràmetres generals (equivalent de ParametresGenerals del Mega) ----
 struct ParametresGenerals {
   int EscenaActiva;
@@ -219,18 +257,20 @@ struct ParametresGenerals {
   int EstatSelector;
   uint32_t tempsPeriodes[8];  // microsegons
   int NumeroCanals;
+  Transicio transicions[4];   // NEW: transicions[i] = escena i+1 -> escena ((i+1)%4)+1
 };
 ParametresGenerals Parametres;
 bool paramsDirty = false;
 
-// ---- Dades de canal: 4 valors (0-255) + 4 modes (0-2) per canal ----
+// ---- Dades de canal: 4 valors (0-255) per canal — ja NO hi ha mode per
+// canal (era 0=gradual/1=inicial/2=final), substituït per les 4 transicions
+// GLOBALS (transicions[], vegeu més amunt) — mateix tipus per a tots els
+// canals durant una transició donada.
 struct CanalData {
   uint8_t valors[4];
-  uint8_t modes[4];
 };
 CanalData canalsData[CHANNEL_BUFFER_SIZE];
 float valorActual[CHANNEL_BUFFER_SIZE];  // valor DMX que s'està enviant ara mateix (per la interpolació)
-float gradient[CHANNEL_BUFFER_SIZE];     // increment per pas de transició
 bool canalsDirty = false;
 
 char channelNames[CHANNEL_BUFFER_SIZE][MAX_CHANNEL_NAME_LENGTH + 1];
@@ -423,24 +463,18 @@ Reproductor *miReproductor;
 void actualizarCanalFix(int i, int estat) {
   const int escenaIndex = estat / 2;
   valorActual[i] = canalsData[i].valors[escenaIndex];
-  gradient[i] = 0.0;
 }
 
-// Un pas de transició gradual (mode 0) o instantània (mode 1/2) cap a
-// l'escena següent.
-void actualizarCanalTransicio(int i, int estatActual, int maxim) {
-  const int escenaIndex = estatActual / 2;
-  const int modo = canalsData[i].modes[escenaIndex];
-
-  if (modo == 0) {
-    const int origen = canalsData[i].valors[escenaIndex % maxim];
-    const int desti = canalsData[i].valors[(escenaIndex + 1) % maxim];
-    gradient[i] = (float)(desti - origen) / (float)numeroPuntsTransicio;
-    valorActual[i] += gradient[i];
-  } else if (modo == 1) {
-    valorActual[i] = canalsData[i].valors[(escenaIndex + 1) % 4];
-  }
-  // modo 2 (final): no canvia res durant la transició, ja hi és des de l'escena origen.
+// Un pas d'interpolació entre l'escena origen i la següent, segons el tipus
+// de transició GLOBAL que toqui (transicions[escenaIndex]) — substitueix
+// l'antic mode per canal (0/1/2). t_pct (0-1000) és el progrés ja calculat
+// per cridaTransicio(), compartit per tots els canals d'aquest tick.
+void actualizarCanalTransicio(int i, int estatActual, uint16_t t_pct) {
+  const int escenaIndex = estatActual / 2;  // mateixa divisió que actualizarCanalFix (bug-fix #1)
+  const uint8_t v0 = canalsData[i].valors[escenaIndex];
+  const uint8_t v1 = canalsData[i].valors[(escenaIndex + 1) % 4];
+  const Transicio &tr = transicions[escenaIndex];
+  valorActual[i] = interpolar(v0, v1, t_pct, tr.tipus, tr.saltPercent);
 }
 
 void enviarCanalEscena(int i, int escenaIndex) {
@@ -448,34 +482,15 @@ void enviarCanalEscena(int i, int escenaIndex) {
   valorActual[i] = canalsData[i].valors[escenaIndex];
 }
 
-// Assigna un valor+mode a una escena concreta d'un canal, des de l'edició
-// en directe dels 3 sliders visibles (V01-03/V31-33) — desa immediatament
-// (com feia el Mega), a diferència de assignarEscena() (V71) que no desa
-// fins que se li demana explícitament, per no escriure NVS 8 cops seguits
-// en una assignació massiva.
+// Assigna un valor a una escena concreta d'un canal, des de l'edició en
+// directe dels 3 sliders visibles (V01-03) — desa immediatament (com feia
+// el Mega), a diferència de la resta de canals d'una assignació massiva
+// (V71) que no desen fins que se'ls demana explícitament.
 void guardarEnviarValor(int i, int escenaIndex, int nuevoValor) {
   if (escenaIndex < 0 || escenaIndex >= 4) return;
   canalsData[i].valors[escenaIndex] = constrain(nuevoValor, 0, 255);
   valorActual[i] = canalsData[i].valors[escenaIndex];
   markCanalsDirty();
-}
-
-void guardarModo(int i, int escenaIndex, int nuevoModo) {
-  if (escenaIndex < 0 || escenaIndex >= 4) return;
-  canalsData[i].modes[escenaIndex] = constrain(nuevoModo, 0, 2);
-  markCanalsDirty();
-}
-
-// Assigna les 4 escenes (valor+mode) d'un cop — protocol V71. Només
-// actualitza el bus si l'escena assignada és l'activa (evita parpellejos
-// en assignar escenes 2-4 mentre la 1 és l'activa).
-void assignarEscena(int i, int escenaIndex, int nuevoValor, int nuevoModo, int escenaActivaIndex) {
-  if (escenaIndex < 0 || escenaIndex >= 4) return;
-  canalsData[i].valors[escenaIndex] = constrain(nuevoValor, 0, 255);
-  canalsData[i].modes[escenaIndex] = constrain(nuevoModo, 0, 2);
-  if (escenaIndex == escenaActivaIndex) {
-    valorActual[i] = canalsData[i].valors[escenaIndex];
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -596,7 +611,6 @@ void loadCanals() {
 
   for (int i = 0; i < CHANNEL_BUFFER_SIZE; i++) {
     valorActual[i] = canalsData[i].valors[0];
-    gradient[i] = 0.0;
   }
 }
 
@@ -883,8 +897,9 @@ void PararReproduccio() {
 }
 
 void cridaTransicio() {
+  const uint16_t t_pct = (uint16_t)(((uint32_t)contadorPuntTransicio * 1000UL) / numeroPuntsTransicio);
   for (int i = 0; i < numeroCanals; i++) {
-    actualizarCanalTransicio(i, EstatActual, num_periodes / 2);
+    actualizarCanalTransicio(i, EstatActual, t_pct);
   }
 }
 
@@ -1043,10 +1058,6 @@ void RecuperarValorsCanals() {
   V[2] = canalsData[Canal_2 - 1].valors[EscenaActiva - 1];
   V[3] = canalsData[Canal_3 - 1].valors[EscenaActiva - 1];
 
-  V[31] = canalsData[Canal_1 - 1].modes[EscenaActiva - 1];
-  V[32] = canalsData[Canal_2 - 1].modes[EscenaActiva - 1];
-  V[33] = canalsData[Canal_3 - 1].modes[EscenaActiva - 1];
-
   enviarCanalEscena(Canal_1 - 1, EscenaActiva - 1);
   enviarCanalEscena(Canal_2 - 1, EscenaActiva - 1);
   enviarCanalEscena(Canal_3 - 1, EscenaActiva - 1);
@@ -1070,6 +1081,7 @@ void InicialitzarPrograma() {
   MusicaMP3 = Parametres.NumeroMusica;
 
   for (int i = 0; i < 8; i++) Temps[i] = Parametres.tempsPeriodes[i];
+  for (int i = 0; i < 4; i++) transicions[i] = Parametres.transicions[i];
 
   tiempoTotalCiclo = 0;
   for (int i = 0; i < NumeroEscenes * 2; i++) tiempoTotalCiclo += Temps[i];
@@ -1141,16 +1153,6 @@ void Escenes() {
     guardarEnviarValor(Canal_3 - 1, EscenaActiva - 1, (int)V[3]);
     return;
   }
-
-  if (canalsData[Canal_1 - 1].modes[EscenaActiva - 1] != (int)V[31]) {
-    guardarModo(Canal_1 - 1, EscenaActiva - 1, (int)V[31]);
-  }
-  if (canalsData[Canal_2 - 1].modes[EscenaActiva - 1] != (int)V[32]) {
-    guardarModo(Canal_2 - 1, EscenaActiva - 1, (int)V[32]);
-  }
-  if (canalsData[Canal_3 - 1].modes[EscenaActiva - 1] != (int)V[33]) {
-    guardarModo(Canal_3 - 1, EscenaActiva - 1, (int)V[33]);
-  }
 }
 
 void AjustVolum() {
@@ -1168,12 +1170,12 @@ void performFactoryReset() {
   Parametres.NivellVolum = 20;
   for (int i = 0; i < 8; i++) Parametres.tempsPeriodes[i] = 5000000UL;
   Parametres.NumeroCanals = DEFAULT_NUMERO_CANALS;
+  for (int i = 0; i < 4; i++) Parametres.transicions[i] = transicions[i] = {LINEAL, 0};
   saveParams();
 
   memset(canalsData, 0, sizeof(canalsData));
   for (int i = 0; i < CHANNEL_BUFFER_SIZE; i++) {
     valorActual[i] = 0;
-    gradient[i] = 0;
   }
   saveCanals();
 
@@ -1347,6 +1349,10 @@ void handleDescriptionChange(const String &rawInput) {
 
 // V71: consulta/assignació massiva d'UN canal, les 4 escenes (valor+mode)
 // més el nom.
+// V71: consulta o assignació de les 4 escenes d'UN canal explícit — ja
+// sense els camps de mode (les transicions ara són globals, no per canal).
+//   V71=N                    -> consulta, respon "v1|v2|v3|v4|nom"
+//   V71=N|v1|v2|v3|v4|nom    -> assigna els 4 valors i el nom
 void handleChannelBulk(const String &rawInput) {
   const int firstPipe = rawInput.indexOf('|');
   const int channel = constrain(
@@ -1354,8 +1360,8 @@ void handleChannelBulk(const String &rawInput) {
 
   if (firstPipe != -1) {
     String rest = rawInput.substring(firstPipe + 1);
-    long fields[8];
-    for (int i = 0; i < 8; i++) {
+    long fields[4];
+    for (int i = 0; i < 4; i++) {
       const int p = rest.indexOf('|');
       if (p == -1) {
         fields[i] = rest.toInt();
@@ -1368,7 +1374,10 @@ void handleChannelBulk(const String &rawInput) {
     const String nom = sanitizeText(rest, MAX_CHANNEL_NAME_LENGTH);
 
     for (int i = 0; i < 4; i++) {
-      assignarEscena(channel - 1, i, fields[i * 2], fields[i * 2 + 1], EscenaActiva - 1);
+      canalsData[channel - 1].valors[i] = (uint8_t)constrain(fields[i], 0, 255);
+    }
+    if (EscenaActiva >= 1 && EscenaActiva <= 4) {
+      valorActual[channel - 1] = canalsData[channel - 1].valors[EscenaActiva - 1];
     }
     nom.toCharArray(channelNames[channel - 1], MAX_CHANNEL_NAME_LENGTH + 1);
 
@@ -1376,23 +1385,53 @@ void handleChannelBulk(const String &rawInput) {
     markNamesDirty();
 
     // Si el canal assignat és un dels 3 actualment seleccionats als
-    // sliders (Canal_1/2/3), V[1-3]/V[31-33] queden desactualitzats — i
-    // Escenes(), que segueix corrent contínuament mentre V[50]==4 (aquesta
-    // pantalla hi és mapejada), detectaria V[1] com "l'usuari ha mogut
-    // l'slider" i sobreescriuria el valor que acabem d'importar amb
-    // l'antic. Mateix bug (i mateixa solució) que ARDMX4.ino's
-    // handleChannelBulk() amb V63.
+    // sliders (Canal_1/2/3), V[1-3] queda desactualitzat — i Escenes(), que
+    // segueix corrent contínuament mentre V[50]==4 (aquesta pantalla hi és
+    // mapejada), detectaria V[1] com "l'usuari ha mogut l'slider" i
+    // sobreescriuria el valor que acabem d'importar amb l'antic. Mateix bug
+    // (i mateixa solució) que ARDMX4.ino's handleChannelBulk() amb V63.
     RecuperarValorsCanals();
   }
 
   const CanalData &c = canalsData[channel - 1];
+  const String reply = String(c.valors[0]) + "|" + String(c.valors[1]) + "|" +
+                        String(c.valors[2]) + "|" + String(c.valors[3]) + "|" +
+                        String(channelNames[channel - 1]);
+  replyText(71, reply.c_str());
+}
+
+// V72: consulta o assignació de les 4 transicions globals (tipus + %salt).
+//   V72=?                        -> consulta
+//   V72=t1|s1|t2|s2|t3|s3|t4|s4  -> assigna (t=TipusTransicio 0-3, s=%salt 0-100)
+// Resposta (en tots dos casos): "t1|s1|t2|s2|t3|s3|t4|s4"
+void handleTransitionsBulk(const String &rawInput) {
+  if (rawInput != "?" && rawInput.length() > 0) {
+    String rest = rawInput;
+    long fields[8];
+    for (int i = 0; i < 8; i++) {
+      const int p = rest.indexOf('|');
+      if (p == -1) {
+        fields[i] = rest.toInt();
+        rest = "";
+      } else {
+        fields[i] = rest.substring(0, p).toInt();
+        rest = rest.substring(p + 1);
+      }
+    }
+    for (int i = 0; i < 4; i++) {
+      transicions[i].tipus = (TipusTransicio)constrain(fields[i * 2], 0, 3);
+      transicions[i].saltPercent = (uint8_t)constrain(fields[i * 2 + 1], 0, 100);
+      Parametres.transicions[i] = transicions[i];
+    }
+    markParamsDirty();
+  }
+
   String reply = "";
   for (int i = 0; i < 4; i++) {
-    reply += String(c.valors[i]) + "|" + String(c.modes[i]);
-    reply += "|";
+    reply += String((int)transicions[i].tipus) + "|" + String(transicions[i].saltPercent);
+    if (i < 3) reply += "|";
   }
-  reply += String(channelNames[channel - 1]);
-  replyText(71, reply.c_str());
+  replyText(72, reply.c_str());
 }
 
 void handleWrite(int index, float value) {
@@ -1473,6 +1512,8 @@ void processFrame(const String &body) {
     handleDescriptionChange(rhs);
   } else if (index == 71) {
     handleChannelBulk(rhs);
+  } else if (index == 72) {
+    handleTransitionsBulk(rhs);
   } else if (index == 73) {
     handlePinVerify(rhs);
   } else if (index == 74) {
