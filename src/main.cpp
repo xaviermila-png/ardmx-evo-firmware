@@ -597,28 +597,31 @@ void loadCanals() {
   const size_t chunkBytes = CHANNEL_CHUNK_SIZE * sizeof(CanalData);
   Serial.printf("[NVS] loadCanals: chunkBytes=%u sizeof(CanalData)=%u\n", (unsigned)chunkBytes,
                 (unsigned)sizeof(CanalData));
-  bool allChunksOk = true;
+  // Validació per tros independent, NO tot-o-res: abans, un sol tros amb
+  // la mida antiga (p.ex. desat abans que CanalData guanyés
+  // transicions[4]) feia caure TOT canalsData a 0, esborrant també els
+  // trossos correctes — i com que saveCanals() ara només reescriu els
+  // trossos tocats (canalsChunkDirty[]), un tros mai editat es podia
+  // quedar amb la mida antiga indefinidament. Confirmat en maquinari real
+  // (ardmx-one-firmware, mateix bug): valors/noms/transicions ja editats
+  // van desaparèixer sencers en arrencar de nou.
   for (int chunk = 0; chunk < CHANNEL_CHUNK_COUNT; chunk++) {
     const String key = "chv" + String(chunk);
     void *dest = &canalsData[chunk * CHANNEL_CHUNK_SIZE];
-    if (!prefs.isKey(key.c_str())) {
-      Serial.printf("[NVS] loadCanals: clau %s no existeix\n", key.c_str());
-      allChunksOk = false;
-      break;
+    bool chunkOk = prefs.isKey(key.c_str());
+    if (chunkOk) {
+      const size_t bytesRead = prefs.getBytes(key.c_str(), dest, chunkBytes);
+      chunkOk = (bytesRead == chunkBytes);
+      if (!chunkOk) {
+        Serial.printf("[NVS] loadCanals: clau %s ha llegit %u bytes (esperava %u), es reinicia nomes aquest tros\n",
+                      key.c_str(), (unsigned)bytesRead, (unsigned)chunkBytes);
+      }
+    } else {
+      Serial.printf("[NVS] loadCanals: clau %s no existeix, es reinicia nomes aquest tros\n", key.c_str());
     }
-    const size_t bytesRead = prefs.getBytes(key.c_str(), dest, chunkBytes);
-    if (bytesRead != chunkBytes) {
-      Serial.printf("[NVS] loadCanals: clau %s ha llegit %u bytes (esperava %u)\n", key.c_str(),
-                    (unsigned)bytesRead, (unsigned)chunkBytes);
-      allChunksOk = false;
-      break;
+    if (!chunkOk) {
+      memset(dest, 0, chunkBytes);
     }
-  }
-  if (!allChunksOk) {
-    Serial.println(F("[NVS] loadCanals: algun tros ha fallat, es reinicia tot canalsData a 0"));
-    memset(canalsData, 0, sizeof(canalsData));
-  } else {
-    Serial.println(F("[NVS] loadCanals: tots els trossos llegits correctament"));
   }
   prefs.end();
 
@@ -665,23 +668,19 @@ void markAllCanalsDirty() {
 
 void loadNames() {
   prefs.begin("ardmxevo", false);
+  // Validació per tros independent — mateix motiu que loadCanals().
   const size_t chunkBytes = CHANNEL_CHUNK_SIZE * (MAX_CHANNEL_NAME_LENGTH + 1);
-  bool allChunksOk = true;
   for (int chunk = 0; chunk < CHANNEL_CHUNK_COUNT; chunk++) {
     const String key = "chn" + String(chunk);
     char *dest = &channelNames[chunk * CHANNEL_CHUNK_SIZE][0];
-    if (!prefs.isKey(key.c_str())) {
-      allChunksOk = false;
-      break;
+    bool chunkOk = prefs.isKey(key.c_str());
+    if (chunkOk) {
+      const size_t bytesRead = prefs.getBytes(key.c_str(), dest, chunkBytes);
+      chunkOk = (bytesRead == chunkBytes);
     }
-    const size_t bytesRead = prefs.getBytes(key.c_str(), dest, chunkBytes);
-    if (bytesRead != chunkBytes) {
-      allChunksOk = false;
-      break;
+    if (!chunkOk) {
+      memset(dest, 0, chunkBytes);
     }
-  }
-  if (!allChunksOk) {
-    memset(channelNames, 0, sizeof(channelNames));
   }
 
   pessebeName = prefs.isKey("pessebe") ? prefs.getString("pessebe", "") : "";
