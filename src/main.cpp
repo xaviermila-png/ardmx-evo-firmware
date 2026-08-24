@@ -485,7 +485,10 @@ void actualizarCanalFix(int i, int estat) {
 void actualizarCanalTransicio(int i, int estatActual, uint16_t t_pct) {
   const int escenaIndex = estatActual / 2;  // mateixa divisió que actualizarCanalFix (bug-fix #1)
   const uint8_t v0 = canalsData[i].valors[escenaIndex];
-  const uint8_t v1 = canalsData[i].valors[(escenaIndex + 1) % 4];
+  // % NumeroEscenes (no % 4 fix): amb menys de 4 escenes actives, la
+  // darrera transició torna a l'escena 1, no a la següent posició fixa
+  // de l'array (que podria ser una escena inactiva/no configurada).
+  const uint8_t v1 = canalsData[i].valors[(escenaIndex + 1) % NumeroEscenes];
   const Transicio &tr = canalsData[i].transicions[escenaIndex];
   valorActual[i] = interpolar(v0, v1, t_pct, tr.tipus, tr.saltPercent);
 }
@@ -1145,7 +1148,9 @@ void Escenes() {
   if (V[35] != 0) {
     V[9] = EscenaActiva + V[35];
     if (V[9] < 1) V[9] = 1;
-    if (V[9] > 4) V[9] = 4;
+    // NumeroEscenes (no 4 fix): no es pot avançar més enllà de l'última
+    // escena activa configurada.
+    if (V[9] > NumeroEscenes) V[9] = NumeroEscenes;
 
     EscenaActiva = V[9];
     Parametres.EscenaActiva = EscenaActiva;

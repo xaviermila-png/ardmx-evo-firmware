@@ -1,8 +1,22 @@
 # Name,   Type, SubType, Offset,   Size,     Flags
 # NVS ampliada a 64 KB (per defecte l'ESP32 en dona 20 KB, insuficient per
-# a les dades de canal (valors+modes) + noms de fins a 510 canals — vegeu
-# el comentari a CHANNEL_CHUNK_SIZE a main.cpp). No fem servir OTA ni
-# SPIFFS/LittleFS, així que no calen aquestes particions; amb 4 MB de
+# a les dades de canal (valors+transicions) + noms de fins a 510 canals —
+# vegeu el comentari a CHANNEL_CHUNK_SIZE a main.cpp). No fem servir OTA
+# ni SPIFFS/LittleFS, així que no calen aquestes particions; amb 4 MB de
 # flaix hi ha marge de sobres per una app única de fins a 3 MB.
-nvs,      data, nvs,     0x9000,   0x17000,
+#
+# IMPORTANT: PlatformIO/Arduino-ESP32 escriu sempre "boot_app0.bin" a
+# l'adreça fixa 0xe000-0xffff en CADA flashejada (vegeu
+# framework-arduinoespressif32/tools/platformio-build.py,
+# FLASH_EXTRA_IMAGES) — no depèn del contingut d'aquesta taula. La
+# versió anterior d'aquest fitxer posava la NVS just a sobre d'aquest
+# rang (0x9000-0x20000, que inclou 0xe000-0x10000): cada reflashejada
+# esborrava part de la NVS real, mateix bug confirmat en maquinari a
+# ardmx-one-firmware. Per això aquí es deixa 0x9000-0xe000 sense
+# reclamar (20KB perduts, irrellevant amb 4MB de flash) i la NVS
+# comença DESPRÉS d'aquesta zona reservada, a 0x10000. app0 es queda
+# igual, a 0x20000 (board_upload.offset_address ja ho reflecteix a
+# platformio.ini).
+otadata,  data, ota,     0xe000,   0x2000,
+nvs,      data, nvs,     0x10000,  0x10000,
 app0,     app,  factory, 0x20000,  0x300000,
