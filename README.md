@@ -2,15 +2,18 @@
 
 Equivalent funcional de l'[ARDMX4](https://github.com/xaviermila-png/ardmx4-firmware)
 (Arduino Mega) amb un cor **ESP32**, reduint cost i afegint Bluetooth i persistència
-integrats. Mateixa funcionalitat: 4 escenes DMX amb transicions, cicle sincronitzat amb
-música MP3, i control des d'un mòbil per Bluetooth mitjançant el protocol `!Vxx=val$`
-(framework Virtuino).
+integrats. Mateixa funcionalitat: 4 escenes DMX amb transicions **pròpies de cada canal**
+(tipus Lineal/Salt/Ease In/Ease Out + percentatge de salt, no compartides entre canals),
+cicle sincronitzat amb música MP3, i control des d'un mòbil per Bluetooth Low Energy (BLE)
+mitjançant el protocol `!Vxx=val$` (framework Virtuino).
 
 ## Maquinari
-- ESP32 DevKit V1 (WROOM-32), Bluetooth clàssic (SPP)
+- ESP32 DevKit V1 (WROOM-32), Bluetooth Low Energy (BLE/GATT — migrat de Bluetooth
+  Classic/SPP el 2026-08, iOS no permet Classic a apps de tercers sense certificació MFi)
 - MAX485 amb direcció automàtica per maquinari (DMX per UART, `DMX_NUM_1`)
 - DFPlayer Mini per UART1 (nivells adaptats: divisor de tensió a la línia RX de l'ESP32)
-- Persistència NVS (partició integrada de l'ESP32, sense EEPROM externa)
+- Trigger extern (mode Manual) a GPIO4, `INPUT_PULLUP`
+- Persistència NVS (partició integrada de l'ESP32, sense EEPROM externa, ampliada a 64 KB)
 
 ## Relació amb els altres firmwares del projecte
 - [`ardmx4-firmware`](https://github.com/xaviermila-png/ardmx4-firmware) — Arduino Mega,
@@ -48,10 +51,10 @@ que l'instal·lador escriu només 3 blocs, sense `boot_app0.bin`:
 | `partitions.bin` | `0x8000` | Taula de particions |
 | `firmware.bin` | `0x20000` | El programa (nota: no `0x10000` — aquest projecte mou l'aplicació per fer lloc a la NVS ampliada, vegeu `board_upload.offset_address` a `platformio.ini`) |
 
-La NVS (`0x9000`-`0x1FFFF`, 92 KB) mai es toca — reflashejar amb aquest
+La NVS (`0x10000`-`0x1FFFF`, 64 KB) mai es toca — reflashejar amb aquest
 instal·lador no esborra la configuració desada. **Important**: no incloure mai
 `boot_app0.bin` en cap flash d'aquest projecte — vegeu el bug documentat més
-avall, que és precisament sobre això.
+avall (ara resolt movent la NVS, no calia deixar de flashejar-lo enlloc més).
 
 **Per actualitzar els binaris de l'instal·lador** quan canvia el codi font:
 `pio run` per compilar, i copiar `.pio/build/esp32dev/bootloader.bin`,
@@ -60,39 +63,41 @@ carpeta `bin/` de totes dues instal·ladors.
 
 ## Bugs trobats i corregits
 
-### `pio run -t upload` escriu `boot_app0.bin` a sobre de la NVS
+### `pio run -t upload` escriu `boot_app0.bin` a sobre de la NVS — RESOLT
 
-**Símptoma**: cap de moment (no reportat per l'usuari) — descobert per
-casualitat el 2026-08-17 mentre es preparava l'instal·lador `.bat`, en llegir
-amb detall la comanda `esptool` exacta que genera PlatformIO.
+**Símptoma real, confirmat en maquinari el 2026-08-24** (a `ardmx-one-firmware`,
+que patia exactament el mateix disseny de partició): després de configurar
+valors/noms/transicions de canal i reiniciar la placa, tot tornava a zero.
+Descobert originalment per casualitat el 2026-08-17 mentre es preparava
+l'instal·lador `.bat`, en llegir amb detall la comanda `esptool` exacta que
+genera PlatformIO — en aquell moment encara no s'havia confirmat l'impacte
+real.
 
-**Causa**: aquest projecte no fa servir OTA — `partitions.csv` només defineix
-`nvs` (`0x9000`, ampliada a `0x17000` = 92 KB) i `app0` tipus `factory`
-(`0x20000`). Però l'entorn `esp32dev` de PlatformIO afegeix per defecte un
-quart fitxer a **qualsevol** comanda d'`upload`, `boot_app0.bin`, escrit
-sempre a `0xE000` — una adreça pensada per a la partició `otadata` que els
-projectes AMB OTA tenen normalment buida just entre la NVS petita per defecte
-(20 KB, acaba a `0xDFFF`) i el propi `otadata`. Com que aquí la NVS s'ha
-ampliat fins a `0x1FFFF` per cabre les dades de tots els canals, `0xE000` cau
-**dins** la NVS en lloc d'en un espai buit, i cada `pio run -t upload` hi
-escriu 8 KB de dades irrellevants a sobre.
+**Causa**: aquest projecte no fa servir OTA — la `partitions.csv` anterior
+només definia `nvs` (`0x9000`, ampliada a `0x17000` = 92 KB) i `app0` tipus
+`factory` (`0x20000`). Però l'entorn `esp32dev` de PlatformIO afegeix per
+defecte un quart fitxer a **qualsevol** comanda d'`upload` (fet des de
+PlatformIO/VS Code, NO des dels instal·ladors `.bat`), `boot_app0.bin`,
+escrit sempre a `0xE000` — una adreça pensada per a la partició `otadata`
+que els projectes AMB OTA tenen normalment buida just entre la NVS petita
+per defecte (20 KB, acaba a `0xDFFF`) i el propi `otadata`. Com que aquí la
+NVS s'havia ampliat fins a `0x1FFFF`, `0xE000` queia **dins** la NVS en lloc
+d'en un espai buit, i cada `pio run -t upload` hi escrivia 8 KB de dades
+irrellevants a sobre — esborrant qualsevol clau NVS que hi tingués dades
+emmagatzemades.
 
-**Impacte real, no confirmat**: si la NVS (basada en pàgines de 4 KB) tenia
-dades emmagatzemades a les pàgines que cobreixen `0xE000`-`0xFFFF`, aquest
-escriptura les hauria corromput silenciosament — sense cap error visible, ja
-que aquest projecte no llegeix mai la partició `otadata` (no en té). No s'ha
-investigat encara si el maquinari ja desplegat n'ha patit les conseqüències.
-
-**Fix aplicat**: l'instal·lador `.bat` (`installer/` i `installer_standalone/`)
-ja NO inclou `boot_app0.bin`. **Pendent**: el `pio run -t upload` de
-PlatformIO (des de VS Code) segueix incloent-lo per defecte — no s'ha corregit
-encara, cal fer-ho abans de tornar a flashejar des de l'IDE.
+**Fix aplicat (2026-08-24)**: la NVS ja NO comença a `0x9000` — ara comença
+just DESPRÉS de la zona `0xE000`-`0xFFFF` (a `0x10000`, 64 KB), deixant
+`0x9000`-`0xDFFF` sense reclamar (20 KB perduts, irrellevant amb 4 MB de
+flash). `app0` es queda igual, a `0x20000`. Vegeu `partitions.csv` actual.
+Amb aquest canvi, `pio run -t upload` pot seguir escrivint `boot_app0.bin` a
+`0xE000` amb tota tranquil·litat — ja no hi ha res important allà.
 
 **Lliçó per als altres firmwares de la família**: qualsevol projecte que
-ampliï la NVS més enllà del que la partició `otadata` per defecte, ocupa
-(`0xE000`), ha de revisar què escriu realment `pio run -t upload` (amb `-v`),
-no donar per fet que PlatformIO respecta la taula de particions personalitzada
-en calcular què flashejar.
+ampliï la NVS més enllà del que la partició `otadata` per defecte ocupa
+(`0xE000`-`0xFFFF`) ha de deixar aquesta franja sense reclamar, no donar per
+fet que PlatformIO respecta la taula de particions personalitzada en
+calcular què flashejar.
 
 ### Salt brusc de color a les transicions per sobre d'uns 100-110 canals actius
 
