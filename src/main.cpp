@@ -287,6 +287,22 @@ char channelNames[CHANNEL_BUFFER_SIZE][MAX_CHANNEL_NAME_LENGTH + 1];
 bool namesDirty = false;
 bool namesChunkDirty[CHANNEL_CHUNK_COUNT] = {false};
 
+// ---- Events (V77) — accions programades en un moment concret del cicle:
+// un so puntual (advertise), un canal forçat a 255, o tots dos alhora. Vegeu
+// la secció "Cicle / escenes" per la lògica de disparament/revert
+// (GestioEvents(), resetEvents()) — aquí només el model de dades i la
+// persistència.
+constexpr int MAX_EVENTS = 10;
+
+struct EventData {
+  uint16_t momentS;  // instant del cicle (s) en què es dispara
+  uint16_t duradaS;  // durada (s) abans de revertir-se
+  uint8_t pistaSo;   // ADVERT/000N.mp3 — 0 = sense so
+  uint16_t canal;    // canal DMX (1-based) forçat a 255 — 0 = sense acció de canal
+};
+EventData events[MAX_EVENTS];
+bool eventsDirty = false;
+
 String pessebeName;
 String descripcio;
 
@@ -726,6 +742,36 @@ void markNamesDirty(int channelIndex0) {
 void markAllNamesDirty() {
   for (int i = 0; i < CHANNEL_CHUNK_COUNT; i++) namesChunkDirty[i] = true;
   namesDirty = true;
+}
+
+// Un sol blob (10 events, pocs bytes cadascun) — molt per sota del límit
+// pràctic de nvs_set_blob, no cal fer chunking com amb canalsData/noms.
+void loadEvents() {
+  prefs.begin("ardmxevo", false);
+  if (prefs.isKey("events")) {
+    const size_t bytesRead = prefs.getBytes("events", events, sizeof(events));
+    if (bytesRead != sizeof(events)) {
+      Serial.println(F("ERROR llegint events — es descarten."));
+      memset(events, 0, sizeof(events));
+    }
+  } else {
+    memset(events, 0, sizeof(events));
+  }
+  prefs.end();
+}
+
+void saveEvents() {
+  prefs.begin("ardmxevo", false);
+  if (prefs.putBytes("events", events, sizeof(events)) != sizeof(events)) {
+    Serial.println(F("ERROR desant events a NVS"));
+  }
+  prefs.end();
+  eventsDirty = false;
+}
+
+void markEventsDirty() {
+  eventsDirty = true;
+  lastChangeMillis = millis();
 }
 
 void loadBtName() {
@@ -1226,6 +1272,10 @@ void performFactoryReset() {
   markAllNamesDirty();
   saveNames();
 
+  memset(events, 0, sizeof(events));
+  markEventsDirty();
+  saveEvents();
+
   Serial.println(F("Reset de fàbrica complet."));
 
   InicialitzarPrograma();
@@ -1644,6 +1694,7 @@ void setup() {
   loadParams();
   loadCanals();
   loadNames();
+  loadEvents();
   loadBtName();
   loadPin();
 
@@ -1779,6 +1830,8 @@ void loop() {
     saveCanals();
   } else if (namesDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
     saveNames();
+  } else if (eventsDirty && millis() - lastChangeMillis > SAVE_DEBOUNCE_MS) {
+    saveEvents();
   }
 
   // Enviament DMX limitat en freqüència
