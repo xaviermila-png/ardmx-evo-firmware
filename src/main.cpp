@@ -61,7 +61,8 @@
     V16      volum DFPlayer (0-30)
     V18      nombre d'escenes actives (1-4)
     V21-V28  temps acumulats dels 8 períodes del cicle (s)
-    V31-V33  mode de transició (0=gradual,1=inicial,2=final) dels 3 canals visibles
+    V31-V33  (retirat) antic mode de transició global dels 3 canals visibles
+             — cada canal té ara les seves 4 transicions pròpies (vegeu V71)
     V35      ordre de canvi d'escena activa (delta)
     V39      MAX_CANALS (510, constant)
     V40      nombre de canals actius (1-510)
@@ -73,13 +74,19 @@
     V65-V67  nom (text) del canal DMX assignat a cada slot 1-3
     V68      nom del pessebre (text)
     V69      descripció (text)
-    V71      consulta/assignació massiva d'UN canal explícit, les 4 escenes
-             de cop (valor+mode) més el nom — no toca la selecció dels
-             sliders. Nou índex (ni V63 del Mega ni V70 de l'One: cap dels
-             dos formats existents cobria "4 escenes + nom" alhora):
-               V71=N                              -> consulta
-               V71=N|v1|m1|v2|m2|v3|m3|v4|m4|nom  -> assigna
-             Resposta sempre "v1|m1|v2|m2|v3|m3|v4|m4|nom".
+    V71      consulta/assignació massiva d'UN canal explícit: els 4 valors
+             d'escena I les 4 transicions pròpies (tipus+%salt) de cop, més
+             el nom — no toca la selecció dels sliders:
+               V71=N                                          -> consulta
+               V71=N|v1|v2|v3|v4|t1|s1|t2|s2|t3|s3|t4|s4|nom  -> assigna
+             Resposta sempre "v1|v2|v3|v4|t1|s1|t2|s2|t3|s3|t4|s4|nom".
+    V77      consulta/assignació massiva d'UN event explícit (0-9) — un so
+             puntual (advertise) i/o un canal forçat a 255 en un moment
+             concret del cicle, vegeu la secció "Events". Mateix patró que
+             V71:
+               V77=N                            -> consulta
+               V77=N|moment|durada|pista|canal  -> assigna
+             Resposta sempre "moment|durada|pista|canal".
 
   Maquinari:
     - MAX485 (direcció automàtica) per DMX: GPIO22=TX, GPIO21=RX (no usat),
@@ -1657,6 +1664,60 @@ void handleChannelBulk(const String &rawInput) {
   replyText(71, reply.c_str());
 }
 
+// V77: consulta o assignació massiva d'UN event explícit (0-9), mateix
+// patró que V71.
+//   V77=N                              -> consulta
+//   V77=N|moment|durada|pista|canal    -> assigna
+// Resposta (en tots dos casos): "moment|durada|pista|canal"
+void handleEventBulk(const String &rawInput) {
+  const int firstPipe = rawInput.indexOf('|');
+  const int idx = constrain(
+      (firstPipe == -1 ? rawInput : rawInput.substring(0, firstPipe)).toInt(), 0, MAX_EVENTS - 1);
+
+  if (firstPipe != -1) {
+    String rest = rawInput.substring(firstPipe + 1);
+    long fields[4];
+    for (int i = 0; i < 4; i++) {
+      const int p = rest.indexOf('|');
+      if (p == -1) {
+        fields[i] = rest.toInt();
+        rest = "";
+      } else {
+        fields[i] = rest.substring(0, p).toInt();
+        rest = rest.substring(p + 1);
+      }
+    }
+
+    // Si aquest event ja estava disparat/actiu amb la definició anterior
+    // (canal forçat o so en curs), s'allibera abans d'assignar-li els nous
+    // paràmetres — evita deixar un canal penjat a 255 amb un event que ja
+    // no existeix (p.ex. si l'usuari l'edita mentre el cicle és actiu).
+    if (eventActiu[idx]) revertirEvent(idx);
+    eventDisparat[idx] = false;
+
+    EventData &ev = events[idx];
+    ev.momentS = (uint16_t)constrain(fields[0], 0, 65535);
+    ev.duradaS = (uint16_t)constrain(fields[1], 0, 65535);
+    ev.pistaSo = (uint8_t)constrain(fields[2], 0, 255);
+    ev.canal = (uint16_t)constrain(fields[3], 0, MAX_CANALS);
+
+    // Com a mínim un dels dos (so/canal) — un event sense cap dels dos no
+    // té sentit i es descarta (validació mínima al firmware; l'app ja ho
+    // valida abans d'enviar-lo).
+    if (ev.pistaSo == 0 && ev.canal == 0) {
+      ev.momentS = 0;
+      ev.duradaS = 0;
+    }
+
+    markEventsDirty();
+  }
+
+  const EventData &ev = events[idx];
+  String reply = String(ev.momentS) + "|" + String(ev.duradaS) + "|" +
+                 String(ev.pistaSo) + "|" + String(ev.canal);
+  replyText(77, reply.c_str());
+}
+
 void handleWrite(int index, float value) {
   if (index < 0 || index >= V_SIZE) return;
   V[index] = value;
@@ -1735,6 +1796,8 @@ void processFrame(const String &body) {
     handleDescriptionChange(rhs);
   } else if (index == 71) {
     handleChannelBulk(rhs);
+  } else if (index == 77) {
+    handleEventBulk(rhs);
   } else if (index == 73) {
     handlePinVerify(rhs);
   } else if (index == 74) {
