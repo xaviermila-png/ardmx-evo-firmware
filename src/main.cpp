@@ -151,7 +151,7 @@ constexpr int MAX_CHANNEL_NAME_LENGTH = 15;
 constexpr int MAX_PESSEBE_NAME_LENGTH = 96;
 constexpr int MAX_DESCRIPTION_LENGTH = 384;
 
-const char *FIRMWARE_VERSION_TEXT = "ARDMX EVO v2.1";
+const char *FIRMWARE_VERSION_TEXT = "ARDMX EVO v2.0";
 
 // PIN de connexió — opcional (String buida = desactivat, comportament de
 // sempre). Quan n'hi ha un, cap V/T es contesta ni s'aplica (V64, V73, V75
@@ -168,7 +168,7 @@ bool pinAuthenticated = false;
 String buildIdentifyJson() {
   // L'app no llegeix aquest camp per l'EVO (només ho fa per distingir One v1
   // de v2) — es bumpa igualment per simetria/debug amb l'altra placa.
-  String json = "{\"tipus\":\"ARDMX_EVO\",\"firmware\":\"2.1.0\",";
+  String json = "{\"tipus\":\"ARDMX_EVO\",\"firmware\":\"2.0.0\",";
   json += "\"num_canals_max\":510,\"pin\":";
   json += (storedPin.length() > 0) ? "true" : "false";
   json += "}";
