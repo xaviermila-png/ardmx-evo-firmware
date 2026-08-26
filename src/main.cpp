@@ -303,6 +303,19 @@ struct EventData {
 EventData events[MAX_EVENTS];
 bool eventsDirty = false;
 
+// Estat de disparament d'aquest cicle (GestioEvents(), resetEvents() —
+// vegeu la secció "Cicle / escenes"). canalForcatPerEvent[i]: quin event
+// (0-9, -1=cap) té ARA MATEIX el control d'aquest canal — mentre no sigui
+// -1, actualizarCanalFix()/actualizarCanalTransicio()/enviarCanalEscena()
+// no toquen valorActual[i], perquè el recàlcul normal d'escena/transició
+// (cridat contínuament, cada tick/canvi d'escena) no esborri el 255 forçat
+// abans que l'event acabi.
+int8_t canalForcatPerEvent[CHANNEL_BUFFER_SIZE];
+bool eventDisparat[MAX_EVENTS] = {false};
+bool eventActiu[MAX_EVENTS] = {false};
+uint32_t eventFinsS[MAX_EVENTS] = {0};
+int8_t eventSoActiu = -1;  // index (0-9) de l'event que té ARA el so (advertise) actiu, -1=cap
+
 String pessebeName;
 String descripcio;
 
@@ -467,6 +480,23 @@ class Reproductor {
     player->stop();
   }
 
+  // Comportament validat en maquinari real amb el sketch de prova
+  // prova_so_extra (branca aïllada, no tocar): advertise() pausa la música
+  // de fons EN CURS i la reprèn tota sola en acabar la pista de
+  // ADVERT/000N.mp3, sense cap ordre addicional. stopAdvertise() la talla
+  // abans que s'acabi sola — mateix mecanisme que allà s'usava per
+  // escurçar el so "a voluntat" (ADVERT_CUT_MS), aquí per fer complir la
+  // durada configurada d'un event.
+  void dispararAdvertise(int pistaAdvert) {
+    if (pistaAdvert <= 0 || !inicializado) return;
+    player->advertise(pistaAdvert);
+  }
+
+  void pararAdvertise() {
+    if (!inicializado) return;
+    player->stopAdvertise();
+  }
+
   bool estaInicializado() { return inicializado; }
 };
 
@@ -488,6 +518,7 @@ Reproductor *miReproductor;
 // llegien fora dels límits de `valors[4]` (mida 4) — confirmat en maquinari
 // real: canviar d'escena barrejava valors d'altres escenes.
 void actualizarCanalFix(int i, int estat) {
+  if (canalForcatPerEvent[i] != -1) return;  // un event té el control d'aquest canal ara mateix
   const int escenaIndex = estat / 2;
   valorActual[i] = canalsData[i].valors[escenaIndex];
 }
@@ -499,6 +530,7 @@ void actualizarCanalFix(int i, int estat) {
 // és el progrés ja calculat per cridaTransicio(), compartit per tots els
 // canals d'aquest tick (només el tipus de corba varia per canal).
 void actualizarCanalTransicio(int i, int estatActual, uint16_t t_pct) {
+  if (canalForcatPerEvent[i] != -1) return;  // un event té el control d'aquest canal ara mateix
   const int escenaIndex = estatActual / 2;  // mateixa divisió que actualizarCanalFix (bug-fix #1)
   const uint8_t v0 = canalsData[i].valors[escenaIndex];
   // % NumeroEscenes (no % 4 fix): amb menys de 4 escenes actives, la
@@ -509,8 +541,15 @@ void actualizarCanalTransicio(int i, int estatActual, uint16_t t_pct) {
   valorActual[i] = interpolar(v0, v1, t_pct, tr.tipus, tr.saltPercent);
 }
 
+// canalForcatPerEvent guard aquí també: sense això, RecuperarValorsCanals()
+// (cridada en navegar d'escena, obrir la pantalla de canals...) esborraria
+// el 255 forçat per un event si el canal afectat coincideix amb un dels 3
+// sliders visibles (Canal_1/2/3) — mateix problema, mateixa solució, que
+// l'app sobreescrivint per error un valor important amb el que tenia desat
+// (vegeu el comentari de handleChannelBulk() sobre aquest mateix patró).
 void enviarCanalEscena(int i, int escenaIndex) {
   if (escenaIndex < 0 || escenaIndex >= 4) return;
+  if (canalForcatPerEvent[i] != -1) return;
   valorActual[i] = canalsData[i].valors[escenaIndex];
 }
 
@@ -922,6 +961,117 @@ bool verificarSequenciaTemps(int m) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Events — disparament/superposició/revert (vegeu la definició d'EventData
+// i canalForcatPerEvent/eventDisparat/eventActiu/eventFinsS/eventSoActiu
+// més amunt). Un event és una acció programada en un instant concret del
+// cicle (tempsActualCicle, la mateixa base de temps que AvancarCicleSiCal())
+// que dura eventFinsS-moment segons abans de revertir-se.
+// ---------------------------------------------------------------------------
+
+// Recalcula immediatament valorActual[i] segons l'escena/transició normal
+// — cridat just després d'alliberar canalForcatPerEvent[i], perquè el canal
+// no es quedi "penjat" a 255 fins al proper tick/canvi d'escena.
+void recalcularCanalNormal(int i) {
+  if (EstatActual % 2 == 0 || numeroPuntsTransicio == 0) {
+    actualizarCanalFix(i, EstatActual);
+  } else {
+    const uint16_t t_pct = (uint16_t)(((uint32_t)contadorPuntTransicio * 1000UL) / numeroPuntsTransicio);
+    actualizarCanalTransicio(i, EstatActual, t_pct);
+  }
+}
+
+void dispararEvent(int e) {
+  const EventData &ev = events[e];
+  eventDisparat[e] = true;
+  eventActiu[e] = true;
+  eventFinsS[e] = (uint32_t)ev.momentS + ev.duradaS;
+
+  if (ev.pistaSo > 0) {
+    // El més recent sempre guanya: si un altre event ja tenia el so actiu,
+    // es talla abans de començar el nou (mateix mecanisme ja validat al
+    // sketch de prova prova_so_extra).
+    if (eventSoActiu != -1 && eventSoActiu != e) {
+      miReproductor->pararAdvertise();
+    }
+    miReproductor->dispararAdvertise(ev.pistaSo);
+    eventSoActiu = e;
+  }
+
+  if (ev.canal > 0) {
+    const int idx0 = ev.canal - 1;
+    if (idx0 >= 0 && idx0 < numeroCanals) {
+      canalForcatPerEvent[idx0] = e;  // pren el control encara que un altre event ja el tingués
+      valorActual[idx0] = 255;
+    }
+  }
+}
+
+void revertirEvent(int e) {
+  const EventData &ev = events[e];
+  eventActiu[e] = false;
+
+  // Només para el so / allibera el canal si ENCARA és aquest event qui el
+  // controla — si un altre event més recent ja l'ha pres (mateix so o
+  // mateix canal), aquest revert no ha de desfer el seu efecte (vegeu
+  // dispararEvent()).
+  if (ev.pistaSo > 0 && eventSoActiu == e) {
+    miReproductor->pararAdvertise();
+    eventSoActiu = -1;
+  }
+
+  if (ev.canal > 0) {
+    const int idx0 = ev.canal - 1;
+    if (idx0 >= 0 && idx0 < numeroCanals && canalForcatPerEvent[idx0] == e) {
+      canalForcatPerEvent[idx0] = -1;
+      recalcularCanalNormal(idx0);
+    }
+  }
+}
+
+// Cridat des d'AvancarCicleSiCal() amb la mateixa base de temps
+// (tempsActualCicle) que la resta del cicle. Cada event es dispara com a
+// màxim un cop per cicle (eventDisparat[]), reiniciat a NouCicle().
+void GestioEvents() {
+  const uint32_t tempsActualCicleS = tempsActualCicle / 1000000UL;
+
+  for (int e = 0; e < MAX_EVENTS; e++) {
+    const EventData &ev = events[e];
+    if (ev.pistaSo == 0 && ev.canal == 0) continue;  // event buit/no configurat
+
+    if (!eventDisparat[e] && tempsActualCicleS >= ev.momentS) {
+      dispararEvent(e);
+    }
+    if (eventActiu[e] && tempsActualCicleS >= eventFinsS[e]) {
+      revertirEvent(e);
+    }
+  }
+}
+
+// Allibera qualsevol so/canal encara forçat per un event i reinicia l'estat
+// de disparament — cal cridar-ho SEMPRE abans del bucle actualizarCanalFix()
+// de NouCicle()/PararReproduccio(), perquè el guard de canalForcatPerEvent
+// no bloquegi la reinicialització normal dels canals.
+void resetEvents() {
+  for (int e = 0; e < MAX_EVENTS; e++) {
+    const EventData &ev = events[e];
+    if (eventActiu[e]) {
+      if (ev.pistaSo > 0 && eventSoActiu == e) {
+        miReproductor->pararAdvertise();
+        eventSoActiu = -1;
+      }
+      if (ev.canal > 0) {
+        const int idx0 = ev.canal - 1;
+        if (idx0 >= 0 && idx0 < CHANNEL_BUFFER_SIZE && canalForcatPerEvent[idx0] == e) {
+          canalForcatPerEvent[idx0] = -1;
+        }
+      }
+    }
+    eventDisparat[e] = false;
+    eventActiu[e] = false;
+  }
+}
+
 void NouCicle() {
   text1 = " ";
   for (int i = 0; i < NumeroEscenes * 2; i++) {
@@ -939,6 +1089,8 @@ void NouCicle() {
   Serial.print(EstatActual);
   Serial.print(F(" MusicaMP3 = "));
   Serial.println(MusicaMP3);
+
+  resetEvents();
 
   if (PrepararReproductorSiCal()) {
     miReproductor->reproducir(MusicaMP3);
@@ -969,6 +1121,7 @@ void PararReproduccio() {
   EstatActual = 0;
   EstatAntic = 0;
   contadorPuntTransicio = 0;
+  resetEvents();
 
   for (int i = 0; i < numeroCanals; i++) {
     actualizarCanalFix(i, EstatActual);
@@ -1037,6 +1190,8 @@ void AvancarCicleSiCal() {
       cridaTransicio();
     }
   }
+
+  GestioEvents();
 }
 
 void PausarReproduccio() {
@@ -1149,6 +1304,8 @@ void RecuperarValorsCanals() {
 
 void InicialitzarPrograma() {
   Serial.println(F("Inicialitzar el programa"));
+
+  resetEvents();
 
   numeroCanals = constrain(Parametres.NumeroCanals, 1, MAX_CANALS);
   V[40] = numeroCanals;
@@ -1690,6 +1847,7 @@ void setup() {
   pinMode(TRIGGER_PIN, INPUT_PULLUP);
 
   memset(V, 0, sizeof(V));
+  memset(canalForcatPerEvent, -1, sizeof(canalForcatPerEvent));
 
   loadParams();
   loadCanals();
