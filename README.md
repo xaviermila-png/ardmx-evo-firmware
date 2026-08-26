@@ -142,6 +142,14 @@ màxim de 510 canals sense pèrdua de tics ni corrupció de la sortida DMX.
 DMX/sèrie — pot limitar silenciosament el nombre de canals gestionables sense transicions
 fluides, sense que hi hagi cap error ni crash evident que ho delati.
 
+## Exportació/importació de la configuració (des de l'app)
+Aquest firmware no genera ni llegeix cap fitxer JSON — l'exportació/
+importació des de la pantalla "Configuració" de l'app es munta i s'aplica
+sencera a base de peticions d'aquest mateix protocol `!Vxx=valor$` (V71 per
+canal, V18/V40/V21-28/V68/V69, i aquí també V00/V16 pel so/volum). L'esquema
+JSON unificat (vàlid tant per a l'ARDMX EVO com per a l'ARDMX One v2, amb els
+camps de so/volum agrupats en un bloc opcional) es documenta a `ardmx_app`.
+
 ## Estat
 Funcional i validat en maquinari real — BLE, cicle/escenes/transicions, DFPlayer i
 persistència NVS operatius. Vegeu "Bugs trobats i corregits" per l'historial de problemes
