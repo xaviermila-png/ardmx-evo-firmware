@@ -1064,8 +1064,22 @@ void dispararEventTest(int idx) {
 void gestionarTestEvent() {
   if (testEventActiu == -1) return;
   if ((int32_t)(millis() - testEventFinsMillis) >= 0) {
-    revertirEvent(testEventActiu);
+    const int idx = testEventActiu;
+    // Confirmat en maquinari real: si l'advertise() acaba sol abans que
+    // s'esgoti la "durada" configurada (el .mp3 de ADVERT és més curt que
+    // la durada), el DFPlayer reprèn tota sola la música de fons — el
+    // mateix comportament ja validat i volgut durant un event real d'un
+    // cicle en marxa (vegeu dispararEvent()). Aquí, en una prova manual
+    // sense cap cicle actiu, aquesta música de fons NO hauria de sonar en
+    // absolut un cop passada la durada — per això cal aquest stop()
+    // explícit addicional (stopAdvertise() per si sol no evita que es
+    // reprengui, només escurça l'advertise en si), i només si aquest event
+    // encara era qui tenia el so (mateix guard que revertirEvent(), per no
+    // tallar el so d'un altre event que ja l'hagi pres mentrestant).
+    const bool teniaElSo = events[idx].pistaSo > 0 && eventSoActiu == idx;
+    revertirEvent(idx);
     testEventActiu = -1;
+    if (teniaElSo) miReproductor->detener();
   }
 }
 
