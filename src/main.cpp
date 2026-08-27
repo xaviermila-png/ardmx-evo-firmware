@@ -87,6 +87,9 @@
                V77=N                            -> consulta
                V77=N|moment|durada|pista|canal  -> assigna
              Resposta sempre "moment|durada|pista|canal".
+    V78      dispara l'event N (0-9) IMMEDIATAMENT (ignora el "moment"
+             configurat) — botó "Provar" de la pantalla Events. Només
+             escriptura, no hi ha consulta. Resposta sempre "OK".
 
   Maquinari:
     - MAX485 (direcció automàtica) per DMX: GPIO22=TX, GPIO21=RX (no usat),
@@ -1036,6 +1039,36 @@ void revertirEvent(int e) {
   }
 }
 
+// ---- Prova manual d'un event (V78) ----
+// Dispara l'event N immediatament des de l'app (botó "Provar" a la
+// pantalla Events), ignorant el seu "moment" configurat — pensat per
+// verificar el so/canal sense haver d'esperar que el cicle hi arribi.
+// Reutilitza dispararEvent()/revertirEvent() (el "més recent sempre
+// guanya" i el guard canalForcatPerEvent[] apliquen igual), però amb el
+// seu propi temporitzador basat en millis() perquè funcioni tant si el
+// cicle és actiu com aturat (GestioEvents() només avança amb
+// tempsActualCicle, que no es mou si no hi ha cap cicle en marxa).
+int8_t testEventActiu = -1;
+uint32_t testEventFinsMillis = 0;
+
+void dispararEventTest(int idx) {
+  if (idx < 0 || idx >= MAX_EVENTS) return;
+  const EventData &ev = events[idx];
+  if (ev.pistaSo == 0 && ev.canal == 0) return;  // event buit, res a provar
+
+  dispararEvent(idx);
+  testEventActiu = idx;
+  testEventFinsMillis = millis() + (uint32_t)ev.duradaS * 1000UL;
+}
+
+void gestionarTestEvent() {
+  if (testEventActiu == -1) return;
+  if ((int32_t)(millis() - testEventFinsMillis) >= 0) {
+    revertirEvent(testEventActiu);
+    testEventActiu = -1;
+  }
+}
+
 // Cridat des d'AvancarCicleSiCal() amb la mateixa base de temps
 // (tempsActualCicle) que la resta del cicle. Cada event es dispara com a
 // màxim un cop per cicle (eventDisparat[]), reiniciat a NouCicle().
@@ -1798,6 +1831,9 @@ void processFrame(const String &body) {
     handleChannelBulk(rhs);
   } else if (index == 77) {
     handleEventBulk(rhs);
+  } else if (index == 78) {
+    dispararEventTest(constrain(rhs.toInt(), 0, MAX_EVENTS - 1));
+    replyText(78, "OK");
   } else if (index == 73) {
     handlePinVerify(rhs);
   } else if (index == 74) {
@@ -1967,6 +2003,7 @@ void loop() {
   drainBleRxQueue();
   AjustVolum();
   GestioDFPlayer();
+  gestionarTestEvent();
   actualitzarModeLed();
   updateStatusLed();
 
