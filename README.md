@@ -1,6 +1,6 @@
 # ARDMX EVO — firmware ESP32
 
-Versió actual: **v2.1** (`FIRMWARE_VERSION_TEXT`, resposta a V62 —
+Versió actual: **v2.0** (`FIRMWARE_VERSION_TEXT`, resposta a V62 —
 comprovable des de l'app un cop connectat, a Crèdits o Menú Principal).
 
 Equivalent funcional de l'[ARDMX4](https://github.com/xaviermila-png/ardmx4-firmware)
@@ -145,15 +145,55 @@ màxim de 510 canals sense pèrdua de tics ni corrupció de la sortida DMX.
 DMX/sèrie — pot limitar silenciosament el nombre de canals gestionables sense transicions
 fluides, sense que hi hagi cap error ni crash evident que ho delati.
 
+## Events (V77/V78) — específic de l'EVO
+
+Fins a 10 accions programades ("events"), cadascuna disparada en un instant
+concret del cicle (`moment`, segons des de l'inici) i que dura uns segons
+(`durada`) abans de revertir-se. Cada event combina, independentment:
+
+- **Un so puntual**: `player.advertise(pista)` reprodueix un fitxer de la
+  carpeta `ADVERT/` del USB del DFPlayer — pausa la música de fons en curs
+  i la reprèn tota sola en acabar (comportament natiu del mòdul, ja validat
+  al sketch de prova aïllat `prova_so_extra`, branca no fusionada).
+- **Un canal forçat a 255** durant la durada de l'event, per sobre del que
+  digui l'escena/transició activa — `canalForcatPerEvent[]` bloqueja el
+  recàlcul normal (`actualizarCanalFix`/`actualizarCanalTransicio`/
+  `enviarCanalEscena`) mentre l'event el controla, i el restaura en acabar.
+
+Cal com a mínim un dels dos (so o canal). Si dos events coincideixen sobre
+el mateix canal o so, el més recent sempre pren el control; el primer no
+es restaura en revertir si l'ha superat un segon.
+
+`GestioEvents()` dispara/revertit els events des de la mateixa base de
+temps que la resta del cicle (`tempsActualCicle`, cridat des
+d'`AvancarCicleSiCal()`), un cop com a màxim per cicle. V78 permet
+disparar un event manualment des de l'app ("Provar" a la pantalla Events),
+amb el seu propi temporitzador basat en `millis()` perquè funcioni igual
+amb el cicle actiu o aturat; en acabar la prova es fa un `stop()`
+addicional del DFPlayer perquè no quedi sonant música de fons real quan no
+n'hi ha cap cicle en marxa (el mòdul reprèn la darrera pista coneguda en
+acabar l'advertise, independentment que hi hagi cap reproducció "de
+veritat" en curs).
+
+Protocol (mateix patró que V71, consulta/assignació per número
+d'element):
+```
+V77=N                            -> consulta l'event N (0-9)
+V77=N|moment|durada|pista|canal  -> assigna
+V78=N                            -> dispara l'event N immediatament
+```
+
 ## Exportació/importació de la configuració (des de l'app)
 Aquest firmware no genera ni llegeix cap fitxer JSON — l'exportació/
 importació des de la pantalla "Configuració" de l'app es munta i s'aplica
 sencera a base de peticions d'aquest mateix protocol `!Vxx=valor$` (V71 per
-canal, V18/V40/V21-28/V68/V69, i aquí també V00/V16 pel so/volum). L'esquema
-JSON unificat (vàlid tant per a l'ARDMX EVO com per a l'ARDMX One v2, amb els
-camps de so/volum agrupats en un bloc opcional) es documenta a `ardmx_app`.
+canal, V18/V40/V21-28/V68/V69, V00/V16 pel so/volum, i V77 pels events).
+L'esquema JSON unificat (vàlid tant per a l'ARDMX EVO com per a l'ARDMX One
+v2, amb els camps de so/volum i els events agrupats en blocs opcionals que
+el One v2 no té) es documenta a `ardmx_app`.
 
 ## Estat
-Funcional i validat en maquinari real — BLE, cicle/escenes/transicions, DFPlayer i
-persistència NVS operatius. Vegeu "Bugs trobats i corregits" per l'historial de problemes
-reals detectats i corregits.
+Funcional i validat en maquinari real — BLE, cicle/escenes/transicions,
+DFPlayer, events (V77/V78) i persistència NVS operatius. Vegeu "Bugs
+trobats i corregits" per l'historial de problemes reals detectats i
+corregits.
