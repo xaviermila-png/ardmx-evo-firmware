@@ -59,11 +59,17 @@ if "%COMPORT%"=="" (
 )
 
 echo.
-echo ATENCIO: aquest instal-lador esborrara TOTA la configuracio desada al
-echo dispositiu (canals, escenes, events, pessebre, nom Bluetooth, PIN...) i
-echo el deixara com de fabrica. Si nomes vols actualitzar el firmware sense
-echo perdre la configuracio, cancel·la i fes-ho amb "pio run -t upload" en
-echo lloc d'aquest instal-lador.
+echo ATENCIO: aquest instal-lador actualitzara el firmware de l'ARDMX EVO a
+echo la versio indicada mes amunt, i ESBORRARA TOTA la configuracio desada
+echo al dispositiu (canals, escenes, events, pessebre, nom Bluetooth,
+echo PIN...), deixant-lo com de fabrica.
+echo.
+echo Si vols conservar la configuracio actual: CANCEL·LA ara, ves a la
+echo pantalla "Configuracio" de l'app i fes una EXPORTACIO (fitxer JSON).
+echo Un cop instal-lat aquest firmware, podras IMPORTAR aquest fitxer per
+echo recuperar canals/escenes/events/pessebre/descripcio -- pero no el nom
+echo Bluetooth ni el PIN, que l'exportacio no inclou i hauras de tornar a
+echo configurar a ma si els havies canviat.
 echo.
 set /p CONFIRM="Vols continuar? (s/n): "
 if /i not "%CONFIRM%"=="s" (
