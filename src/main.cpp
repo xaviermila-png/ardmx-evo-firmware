@@ -1170,12 +1170,22 @@ void PararReproduccio() {
   V[10] = 0;
   cicloEnCurso = false;
 
-  miReproductor->detener();
-
   EstatActual = 0;
   EstatAntic = 0;
   contadorPuntTransicio = 0;
   resetEvents();
+
+  // detener() ha d'anar DESPRÉS de resetEvents(), no abans: si un event
+  // encara tenia el so actiu, resetEvents() crida pararAdvertise()
+  // (stopAdvertise()), que el DFPlayer interpreta com "reprèn la música de
+  // fons anterior" (el mateix mecanisme ja validat/corregit a
+  // gestionarTestEvent() per al botó "Provar"). Si detener() es crida
+  // ABANS, aquest resum posterior el "guanya" i queda sonant música
+  // encara que el cicle ja estigui aturat — confirmat en maquinari real:
+  // aturar la reproducció just abans que acabés un event de so la deixava
+  // sonant tota sola, sense que el cicle avancés. Cridant-lo AL FINAL,
+  // sempre és l'última ordre que rep el mòdul.
+  miReproductor->detener();
 
   for (int i = 0; i < numeroCanals; i++) {
     actualizarCanalFix(i, EstatActual);

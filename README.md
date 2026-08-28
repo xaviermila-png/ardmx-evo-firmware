@@ -145,6 +145,26 @@ màxim de 510 canals sense pèrdua de tics ni corrupció de la sortida DMX.
 DMX/sèrie — pot limitar silenciosament el nombre de canals gestionables sense transicions
 fluides, sense que hi hagi cap error ni crash evident que ho delati.
 
+### Aturar la reproducció mentre un event de so és actiu deixava sonant música de fons
+
+**Símptoma**: confirmat en maquinari real — si es parava la reproducció (Stop) mentre un
+event amb so encara estava sonant, la música de fons es tornava a sentir tota sola, encara
+que el cicle ja no avancés (`cicloEnCurso=false`).
+
+**Causa**: `PararReproduccio()` cridava `miReproductor->detener()` (`player.stop()`) ABANS
+de `resetEvents()`. Si l'event encara tenia el so actiu, `resetEvents()` cridava
+`pararAdvertise()` (`stopAdvertise()`) — que el DFPlayer interpreta com "reprèn la música de
+fons anterior" (el mateix mecanisme ja documentat a la secció "Events" més avall, validat amb
+el botó "Provar"). Com que aquest resum passava DESPRÉS del `detener()` inicial, guanyava
+l'últim i quedava sonant.
+
+**Fix**: `detener()` ara es crida DESPRÉS de `resetEvents()`, no abans — sempre és l'última
+ordre que rep el DFPlayer en aturar la reproducció.
+
+**Lliçó**: qualsevol punt que aturi la reproducció/el cicle ha d'assegurar-se que `detener()`
+és la darrera ordre enviada al DFPlayer, no una entre d'altres — `stopAdvertise()` pot
+reprendre música per si sol, independentment de qualsevol `stop()` anterior.
+
 ## Events (V77/V78) — específic de l'EVO
 
 Fins a 10 accions programades ("events"), cadascuna disparada en un instant
