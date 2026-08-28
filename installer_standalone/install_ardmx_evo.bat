@@ -11,6 +11,11 @@ echo.
 set "ESPTOOL=%~dp0esptool.exe"
 set "BINDIR=%~dp0bin"
 
+if exist "%BINDIR%\version.txt" (
+    type "%BINDIR%\version.txt"
+    echo.
+)
+
 if not exist "%ESPTOOL%" (
     echo ERROR: no es troba esptool.exe al costat d'aquest script.
     goto :fi

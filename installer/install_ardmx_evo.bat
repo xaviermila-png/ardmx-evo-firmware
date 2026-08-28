@@ -11,6 +11,11 @@ set "PIO_PYTHON=%USERPROFILE%\.platformio\penv\Scripts\python.exe"
 set "ESPTOOL=%USERPROFILE%\.platformio\packages\tool-esptoolpy\esptool.py"
 set "BINDIR=%~dp0bin"
 
+if exist "%BINDIR%\version.txt" (
+    type "%BINDIR%\version.txt"
+    echo.
+)
+
 if not exist "%PIO_PYTHON%" (
     echo ERROR: no s'ha trobat el Python de PlatformIO a:
     echo   %PIO_PYTHON%

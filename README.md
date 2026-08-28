@@ -62,7 +62,9 @@ avall (ara resolt movent la NVS, no calia deixar de flashejar-lo enlloc més).
 **Per actualitzar els binaris de l'instal·lador** quan canvia el codi font:
 `pio run` per compilar, i copiar `.pio/build/esp32dev/bootloader.bin`,
 `.pio/build/esp32dev/partitions.bin` i `.pio/build/esp32dev/firmware.bin` a la
-carpeta `bin/` de totes dues instal·ladors.
+carpeta `bin/` de totes dues instal·ladors. Actualitza també `bin/version.txt`
+(versió + data) a totes dues — l'script `.bat` el mostra en arrencar perquè
+es pugui confirmar quina versió s'està a punt d'instal·lar abans de flashejar.
 
 ## Bugs trobats i corregits
 
