@@ -59,6 +59,36 @@ if "%COMPORT%"=="" (
 )
 
 echo.
+echo ATENCIO: aquest instal-lador esborrara TOTA la configuracio desada al
+echo dispositiu (canals, escenes, events, pessebre, nom Bluetooth, PIN...) i
+echo el deixara com de fabrica. Si nomes vols actualitzar el firmware sense
+echo perdre la configuracio, cancel·la i fes-ho amb "pio run -t upload" en
+echo lloc d'aquest instal-lador.
+echo.
+set /p CONFIRM="Vols continuar? (s/n): "
+if /i not "%CONFIRM%"=="s" (
+    echo Cancel·lat.
+    goto :fi
+)
+
+echo.
+echo Esborrant la configuracio anterior (NVS)...
+echo.
+
+"%PIO_PYTHON%" "%ESPTOOL%" --chip esp32 --port %COMPORT% --baud 460800 ^
+    erase_region 0x10000 0x10000
+
+if errorlevel 1 (
+    echo.
+    echo ============================================
+    echo   Hi ha hagut un error esborrant la configuracio.
+    echo   Comprova que el port es correcte i que
+    echo   el cable USB esta be endollat.
+    echo ============================================
+    goto :fi
+)
+
+echo.
 echo Flashejant %COMPORT%... no desendollis el cable.
 echo.
 

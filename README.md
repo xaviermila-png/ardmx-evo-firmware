@@ -41,12 +41,15 @@ haver d'obrir el projecte ni compilar res (mateix patró que
 - **`installer/`** — versió lleugera que reutilitza el Python/`esptool.py` que
   ja porta PlatformIO instal·lat en aquest ordinador.
 
-Dona doble clic a `install_ardmx_evo.bat`, escriu el port COM de l'ESP32 i
-prem Enter.
+Dona doble clic a `install_ardmx_evo.bat`, escriu el port COM de l'ESP32,
+confirma que vols esborrar la configuració existent i prem Enter.
 
 **Què fa exactament** — a diferència de l'ARDMX One, aquest firmware **no fa
-servir OTA** (només té una partició `factory`, vegeu `partitions.csv`), així
-que l'instal·lador escriu només 3 blocs, sense `boot_app0.bin`:
+servir OTA** (només té una partició `factory`, vegeu `partitions.csv`). Amb
+confirmació explícita de l'usuari, l'instal·lador primer esborra la NVS
+sencera (`erase_region 0x10000 0x10000`, 64 KB — canals, escenes, events,
+pessebre, descripció, nom Bluetooth, PIN, tot) i després escriu 3 blocs,
+sense `boot_app0.bin`:
 
 | Fitxer | Adreça | Contingut |
 |---|---|---|
@@ -54,10 +57,20 @@ que l'instal·lador escriu només 3 blocs, sense `boot_app0.bin`:
 | `partitions.bin` | `0x8000` | Taula de particions |
 | `firmware.bin` | `0x20000` | El programa (nota: no `0x10000` — aquest projecte mou l'aplicació per fer lloc a la NVS ampliada, vegeu `board_upload.offset_address` a `platformio.ini`) |
 
-La NVS (`0x10000`-`0x1FFFF`, 64 KB) mai es toca — reflashejar amb aquest
-instal·lador no esborra la configuració desada. **Important**: no incloure mai
-`boot_app0.bin` en cap flash d'aquest projecte — vegeu el bug documentat més
-avall (ara resolt movent la NVS, no calia deixar de flashejar-lo enlloc més).
+**Instal·lador = torna a l'estat de fàbrica sempre** (decisió explícita del
+2026-08-28: abans es preservava la NVS entre flashejos, ara es vol el
+contrari — cada instal·lació ha de deixar el dispositiu net). Si només vols
+actualitzar el firmware SENSE perdre la configuració (p. ex. durant
+desenvolupament), fes-ho amb `pio run -t upload` en lloc de l'instal·lador —
+aquest camí sí que preserva la NVS (i és per això que cal l'`erase_region`
+explícit a l'instal·lador: PlatformIO/`pio run -t upload` no toca mai la
+NVS per si sol). El "Reset de fàbrica" de dins l'app és un tercer camí,
+diferent d'aquests dos: esborra canals/escenes/events/pessebre/descripció
+però **mai** el nom Bluetooth ni el PIN (vegeu `performFactoryReset()`).
+
+**Important**: no incloure mai `boot_app0.bin` en cap flash d'aquest
+projecte — vegeu el bug documentat més avall (ara resolt movent la NVS, no
+calia deixar de flashejar-lo enlloc més).
 
 **Per actualitzar els binaris de l'instal·lador** quan canvia el codi font:
 `pio run` per compilar, i copiar `.pio/build/esp32dev/bootloader.bin`,
