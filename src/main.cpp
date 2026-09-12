@@ -81,12 +81,12 @@
                V71=N|v1|v2|v3|v4|t1|s1|t2|s2|t3|s3|t4|s4|nom  -> assigna
              Resposta sempre "v1|v2|v3|v4|t1|s1|t2|s2|t3|s3|t4|s4|nom".
     V77      consulta/assignació massiva d'UN event explícit (0-9) — un so
-             puntual (advertise) i/o un canal forçat a 255 en un moment
+             puntual (advertise) i/o un canal forçat a un valor en un moment
              concret del cicle, vegeu la secció "Events". Mateix patró que
              V71:
-               V77=N                            -> consulta
-               V77=N|moment|durada|pista|canal  -> assigna
-             Resposta sempre "moment|durada|pista|canal".
+               V77=N                                  -> consulta
+               V77=N|moment|durada|pista|canal|valor  -> assigna
+             Resposta sempre "moment|durada|pista|canal|valor".
     V78      dispara l'event N (0-9) IMMEDIATAMENT (ignora el "moment"
              configurat) — botó "Provar" de la pantalla Events. Només
              escriptura, no hi ha consulta. Resposta sempre "OK".
@@ -298,7 +298,7 @@ bool namesDirty = false;
 bool namesChunkDirty[CHANNEL_CHUNK_COUNT] = {false};
 
 // ---- Events (V77) — accions programades en un moment concret del cicle:
-// un so puntual (advertise), un canal forçat a 255, o tots dos alhora. Vegeu
+// un so puntual (advertise), un canal forçat a un valor, o tots dos alhora. Vegeu
 // la secció "Cicle / escenes" per la lògica de disparament/revert
 // (GestioEvents(), resetEvents()) — aquí només el model de dades i la
 // persistència.
@@ -308,8 +308,13 @@ struct EventData {
   uint16_t momentS;  // instant del cicle (s) en què es dispara
   uint16_t duradaS;  // durada (s) abans de revertir-se
   uint8_t pistaSo;   // ADVERT/000N.mp3 — 0 = sense so
-  uint16_t canal;    // canal DMX (1-based) forçat a 255 — 0 = sense acció de canal
+  uint16_t canal;    // canal DMX (1-based) forçat a "valor" — 0 = sense acció de canal
+  uint8_t valor;     // valor DMX (0-255) forçat al canal mentre l'event és actiu
 };
+// sizeof(EventData) puja de 8 a 10 bytes amb "valor" (padding d'alineació
+// inclòs) — sizeof(events) puja de 80 a 100 bytes amb MAX_EVENTS=10, molt
+// per sota de qualsevol límit de mida d'entrada NVS (Preferences/nvs_set_blob
+// admet blobs de fins a ~508000 bytes), no cal cap canvi de partició.
 EventData events[MAX_EVENTS];
 bool eventsDirty = false;
 
@@ -318,7 +323,7 @@ bool eventsDirty = false;
 // (0-9, -1=cap) té ARA MATEIX el control d'aquest canal — mentre no sigui
 // -1, actualizarCanalFix()/actualizarCanalTransicio()/enviarCanalEscena()
 // no toquen valorActual[i], perquè el recàlcul normal d'escena/transició
-// (cridat contínuament, cada tick/canvi d'escena) no esborri el 255 forçat
+// (cridat contínuament, cada tick/canvi d'escena) no esborri el valor forçat
 // abans que l'event acabi.
 int8_t canalForcatPerEvent[CHANNEL_BUFFER_SIZE];
 bool eventDisparat[MAX_EVENTS] = {false};
@@ -553,7 +558,7 @@ void actualizarCanalTransicio(int i, int estatActual, uint16_t t_pct) {
 
 // canalForcatPerEvent guard aquí també: sense això, RecuperarValorsCanals()
 // (cridada en navegar d'escena, obrir la pantalla de canals...) esborraria
-// el 255 forçat per un event si el canal afectat coincideix amb un dels 3
+// el valor forçat per un event si el canal afectat coincideix amb un dels 3
 // sliders visibles (Canal_1/2/3) — mateix problema, mateixa solució, que
 // l'app sobreescrivint per error un valor important amb el que tenia desat
 // (vegeu el comentari de handleChannelBulk() sobre aquest mateix patró).
@@ -981,7 +986,7 @@ bool verificarSequenciaTemps(int m) {
 
 // Recalcula immediatament valorActual[i] segons l'escena/transició normal
 // — cridat just després d'alliberar canalForcatPerEvent[i], perquè el canal
-// no es quedi "penjat" a 255 fins al proper tick/canvi d'escena.
+// no es quedi "penjat" amb el valor forçat fins al proper tick/canvi d'escena.
 void recalcularCanalNormal(int i) {
   if (EstatActual % 2 == 0 || numeroPuntsTransicio == 0) {
     actualizarCanalFix(i, EstatActual);
@@ -1012,7 +1017,7 @@ void dispararEvent(int e) {
     const int idx0 = ev.canal - 1;
     if (idx0 >= 0 && idx0 < numeroCanals) {
       canalForcatPerEvent[idx0] = e;  // pren el control encara que un altre event ja el tingués
-      valorActual[idx0] = 255;
+      valorActual[idx0] = ev.valor;
     }
   }
 }
@@ -1723,9 +1728,9 @@ void handleChannelBulk(const String &rawInput) {
 
 // V77: consulta o assignació massiva d'UN event explícit (0-9), mateix
 // patró que V71.
-//   V77=N                              -> consulta
-//   V77=N|moment|durada|pista|canal    -> assigna
-// Resposta (en tots dos casos): "moment|durada|pista|canal"
+//   V77=N                                  -> consulta
+//   V77=N|moment|durada|pista|canal|valor  -> assigna
+// Resposta (en tots dos casos): "moment|durada|pista|canal|valor"
 void handleEventBulk(const String &rawInput) {
   const int firstPipe = rawInput.indexOf('|');
   const int idx = constrain(
@@ -1733,8 +1738,8 @@ void handleEventBulk(const String &rawInput) {
 
   if (firstPipe != -1) {
     String rest = rawInput.substring(firstPipe + 1);
-    long fields[4];
-    for (int i = 0; i < 4; i++) {
+    long fields[5];
+    for (int i = 0; i < 5; i++) {
       const int p = rest.indexOf('|');
       if (p == -1) {
         fields[i] = rest.toInt();
@@ -1747,8 +1752,9 @@ void handleEventBulk(const String &rawInput) {
 
     // Si aquest event ja estava disparat/actiu amb la definició anterior
     // (canal forçat o so en curs), s'allibera abans d'assignar-li els nous
-    // paràmetres — evita deixar un canal penjat a 255 amb un event que ja
-    // no existeix (p.ex. si l'usuari l'edita mentre el cicle és actiu).
+    // paràmetres — evita deixar un canal penjat amb un valor forçat d'un
+    // event que ja no existeix (p.ex. si l'usuari l'edita mentre el cicle
+    // és actiu).
     if (eventActiu[idx]) revertirEvent(idx);
     eventDisparat[idx] = false;
 
@@ -1757,6 +1763,7 @@ void handleEventBulk(const String &rawInput) {
     ev.duradaS = (uint16_t)constrain(fields[1], 0, 65535);
     ev.pistaSo = (uint8_t)constrain(fields[2], 0, 255);
     ev.canal = (uint16_t)constrain(fields[3], 0, MAX_CANALS);
+    ev.valor = (uint8_t)constrain(fields[4], 0, 255);
 
     // Com a mínim un dels dos (so/canal) — un event sense cap dels dos no
     // té sentit i es descarta (validació mínima al firmware; l'app ja ho
@@ -1764,6 +1771,7 @@ void handleEventBulk(const String &rawInput) {
     if (ev.pistaSo == 0 && ev.canal == 0) {
       ev.momentS = 0;
       ev.duradaS = 0;
+      ev.valor = 0;
     }
 
     markEventsDirty();
@@ -1771,7 +1779,7 @@ void handleEventBulk(const String &rawInput) {
 
   const EventData &ev = events[idx];
   String reply = String(ev.momentS) + "|" + String(ev.duradaS) + "|" +
-                 String(ev.pistaSo) + "|" + String(ev.canal);
+                 String(ev.pistaSo) + "|" + String(ev.canal) + "|" + String(ev.valor);
   replyText(77, reply.c_str());
 }
 
