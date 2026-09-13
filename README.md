@@ -1,6 +1,6 @@
 # ARDMX EVO — firmware ESP32
 
-Versió actual: **v2.0** (`FIRMWARE_VERSION_TEXT`, resposta a V62 —
+Versió actual: **v2.1** (`FIRMWARE_VERSION_TEXT`, resposta a V62 —
 comprovable des de l'app un cop connectat, a Crèdits o Menú Principal).
 
 Equivalent funcional de l'[ARDMX4](https://github.com/xaviermila-png/ardmx4-firmware)

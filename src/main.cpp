@@ -134,7 +134,7 @@ constexpr int TRIGGER_PIN = 4;  // mode Trigger (EstatSelector==2), INPUT_PULLUP
 constexpr uint32_t DMX_SEND_INTERVAL_MS = 25;
 
 // Buffer intern reservat per a 510 canals (límit físic), encara que el
-// valor per defecte/inicial de canals actius sigui 100 — així es pot
+// valor per defecte/inicial de canals actius sigui 102 — així es pot
 // pujar numeroCanals en calent des de l'app sense recompilar ni migrar
 // dades. CHANNEL_BUFFER_SIZE (múltiple de CHANNEL_CHUNK_SIZE) és una mica
 // més gran que MAX_CANALS perquè els trossos NVS tinguin totes la mateixa
@@ -143,7 +143,9 @@ constexpr int MAX_CANALS = 510;
 constexpr int CHANNEL_CHUNK_SIZE = 32;
 constexpr int CHANNEL_BUFFER_SIZE = 512;  // 16 * 32, cobreix MAX_CANALS amb marge
 constexpr int CHANNEL_CHUNK_COUNT = CHANNEL_BUFFER_SIZE / CHANNEL_CHUNK_SIZE;  // 16
-constexpr int DEFAULT_NUMERO_CANALS = 100;  // valor inicial/de fàbrica (com l'ARDMX4 actual)
+// Multiple de 3 (com l'ARDMX One) perquè els 3 sliders visibles puguin
+// avançar per grups sencers (Canal_1/2/3 += 3) sense mai sobrepassar-lo.
+constexpr int DEFAULT_NUMERO_CANALS = 102;  // valor inicial/de fàbrica
 
 constexpr uint32_t SAVE_DEBOUNCE_MS = 500;
 
@@ -154,7 +156,7 @@ constexpr int MAX_CHANNEL_NAME_LENGTH = 15;
 constexpr int MAX_PESSEBE_NAME_LENGTH = 96;
 constexpr int MAX_DESCRIPTION_LENGTH = 384;
 
-const char *FIRMWARE_VERSION_TEXT = "ARDMX EVO v2.0";
+const char *FIRMWARE_VERSION_TEXT = "ARDMX EVO v2.1";
 
 // PIN de connexió — opcional (String buida = desactivat, comportament de
 // sempre). Quan n'hi ha un, cap V/T es contesta ni s'aplica (V64, V73, V75
