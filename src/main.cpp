@@ -1417,6 +1417,27 @@ void InicialitzarPrograma() {
 }
 
 void Escenes() {
+  // Es desa primer qualsevol edicio pendent dels 3 sliders visibles (V[1..3]
+  // diferent del valor ja desat per a l'escena activa) — ABANS de mirar si
+  // tambe ha arribat un canvi d'escena (V[35]) o de grup de canals (V[7])
+  // en aquest mateix cicle de loop(): dos escriptures fetes molt seguides
+  // des de l'app (l'usuari mou un slider i de seguida canvia d'escena/grup)
+  // poden arribar totes dues abans que loop() torni a cridar Escenes(), i
+  // les branques de V[35]/V[7] de mes avall surten amb "return" de seguida
+  // — mai arribaven a la comprovacio de V[1..3] guardada aqui baix. A sobre,
+  // aquestes branques ja criden RecuperarValorsCanals(), que sobreescriu
+  // V[1..3] amb el valor antic — l'edicio es perdia en silenci sense
+  // arribar-se mai a desar. Confirmat en maquinari real.
+  if (V[1] != canalsData[Canal_1 - 1].valors[EscenaActiva - 1]) {
+    guardarEnviarValor(Canal_1 - 1, EscenaActiva - 1, (int)V[1]);
+  }
+  if (V[2] != canalsData[Canal_2 - 1].valors[EscenaActiva - 1]) {
+    guardarEnviarValor(Canal_2 - 1, EscenaActiva - 1, (int)V[2]);
+  }
+  if (V[3] != canalsData[Canal_3 - 1].valors[EscenaActiva - 1]) {
+    guardarEnviarValor(Canal_3 - 1, EscenaActiva - 1, (int)V[3]);
+  }
+
   if (V[35] != 0) {
     V[9] = EscenaActiva + V[35];
     if (V[9] < 1) V[9] = 1;
@@ -1449,19 +1470,6 @@ void Escenes() {
 
     RecuperarValorsCanals();
     V[7] = 0;
-    return;
-  }
-
-  if (V[1] != canalsData[Canal_1 - 1].valors[EscenaActiva - 1]) {
-    guardarEnviarValor(Canal_1 - 1, EscenaActiva - 1, (int)V[1]);
-    return;
-  }
-  if (V[2] != canalsData[Canal_2 - 1].valors[EscenaActiva - 1]) {
-    guardarEnviarValor(Canal_2 - 1, EscenaActiva - 1, (int)V[2]);
-    return;
-  }
-  if (V[3] != canalsData[Canal_3 - 1].valors[EscenaActiva - 1]) {
-    guardarEnviarValor(Canal_3 - 1, EscenaActiva - 1, (int)V[3]);
     return;
   }
 }
