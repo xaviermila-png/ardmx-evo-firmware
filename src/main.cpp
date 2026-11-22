@@ -156,7 +156,7 @@ constexpr int MAX_CHANNEL_NAME_LENGTH = 15;
 constexpr int MAX_PESSEBE_NAME_LENGTH = 96;
 constexpr int MAX_DESCRIPTION_LENGTH = 384;
 
-const char *FIRMWARE_VERSION_TEXT = "ARDMX EVO v2.1";
+const char *FIRMWARE_VERSION_TEXT = "ARDMX EVO v2.2";
 
 // PIN de connexió — opcional (String buida = desactivat, comportament de
 // sempre). Quan n'hi ha un, cap V/T es contesta ni s'aplica (V64, V73, V75
@@ -173,7 +173,7 @@ bool pinAuthenticated = false;
 String buildIdentifyJson() {
   // L'app no llegeix aquest camp per l'EVO (només ho fa per distingir One v1
   // de v2) — es bumpa igualment per simetria/debug amb l'altra placa.
-  String json = "{\"tipus\":\"ARDMX_EVO\",\"firmware\":\"2.0.0\",";
+  String json = "{\"tipus\":\"ARDMX_EVO\",\"firmware\":\"2.2.0\",";
   json += "\"num_canals_max\":510,\"pin\":";
   json += (storedPin.length() > 0) ? "true" : "false";
   json += "}";
@@ -408,6 +408,17 @@ class Reproductor {
   int pista;
   const int numCanciones = 4;
 
+  // Estat del reintent NO bloquejant (vegeu iniciarReintent()/
+  // comprovarReintentPendent()) — substitueix cridar intentarInicializar()
+  // (que fa un player->begin() capaç de quedar-se fins a 2.2s esperant
+  // resposta) cada cop que GestioDFPlayer() torna a provar. Només
+  // s'utilitza quan NO hi ha USB a l'arrencada (la primera inicialització,
+  // al constructor, sí que pot bloquejar un moment — passa un sol cop
+  // abans que loop() ni hagi començat, no és el problema).
+  bool esperantReintent = false;
+  uint32_t inicReintent = 0;
+  static const uint32_t TIMEOUT_REINTENT_MS = 2000;
+
  public:
   Reproductor(HardwareSerial &serialPort) : inicializado(false), volumen(20), pista(1) {
     player = new DFRobotDFPlayerMini();
@@ -438,6 +449,51 @@ class Reproductor {
     Serial.println(F("DFPlayer Mini inicialitzat correctament."));
     return true;
   }
+
+  // Comença una comprovació de si el DFPlayer ja respon, SENSE bloquejar:
+  // envia el reset i torna de seguida — comprovarReintentPendent() fa el
+  // seguiment en voltes posteriors de loop(). El _serial intern ja va
+  // quedar lligat al constructor (primera crida a intentarInicializar()),
+  // així que no cal tornar a cridar begin().
+  void iniciarReintent(HardwareSerial &serialPort) {
+    if (esperantReintent) return;
+    Serial.println(F("Intentant inicialitzar DFPlayer Mini..."));
+    player->reset();
+    esperantReintent = true;
+    inicReintent = millis();
+  }
+
+  // Cal cridar-ho a cada volta de loop() mentre esperantReintent sigui
+  // true. Torna true quan la comprovació ja ha acabat (amb èxit o sense) —
+  // false mentre encara espera resposta, sense haver fet cap espera
+  // bloquejant pròpia.
+  bool comprovarReintentPendent() {
+    if (!esperantReintent) return true;
+
+    if (player->available()) {
+      const uint8_t tipus = player->readType();
+      if (tipus == DFPlayerCardOnline || tipus == DFPlayerUSBOnline) {
+        inicializado = true;
+        player->volume(volumen);
+        dfplayerUSBDisponible = true;
+        esperantReintent = false;
+        Serial.println(F("DFPlayer Mini inicialitzat correctament."));
+        return true;
+      }
+    }
+
+    if (millis() - inicReintent >= TIMEOUT_REINTENT_MS) {
+      inicializado = false;
+      dfplayerUSBDisponible = false;
+      esperantReintent = false;
+      Serial.println(F("DFPlayer no disponible. Sortida d'audio en repòs."));
+      return true;
+    }
+
+    return false;
+  }
+
+  bool teReintentPendent() { return esperantReintent; }
 
   // Consulta (sense bloquejar) events del DFPlayer (inserció/extracció
   // d'USB...). Es crida a cada volta del loop() — no es torna a
@@ -955,6 +1011,21 @@ void GestioDFPlayer() {
     return;
   }
 
+  // Reintent en curs (iniciat en una volta anterior): mira si ja ha
+  // arribat resposta o ha passat el temps d'espera, sense bloquejar gens
+  // — abans aquí es cridava intentarInicializar(), que podia deixar
+  // loop() (i per tant el DMX, les transicions, la recepció BLE...)
+  // congelat fins a 2,2 segons cada vegada que no hi havia USB. Confirmat
+  // en maquinari real: això feia pausar-se la fosa d'una transició en
+  // marxa cada cop que passava.
+  if (miReproductor->teReintentPendent()) {
+    if (!miReproductor->comprovarReintentPendent()) return;
+    inicialitzantUSB = false;
+    dfplayerUSBDisponible = miReproductor->estaInicializado();
+    actualitzarModeLed();
+    return;
+  }
+
   const uint32_t REINTENT_DFPLAYER_MS = 5000;
   static uint32_t ultimReintent = 0;
   if (millis() - ultimReintent < REINTENT_DFPLAYER_MS) return;
@@ -963,11 +1034,7 @@ void GestioDFPlayer() {
   inicialitzantUSB = true;
   actualitzarModeLed();
 
-  miReproductor->intentarInicializar(dfSerial);
-
-  inicialitzantUSB = false;
-  dfplayerUSBDisponible = miReproductor->estaInicializado();
-  actualitzarModeLed();
+  miReproductor->iniciarReintent(dfSerial);
 }
 
 bool verificarSequenciaTemps(int m) {

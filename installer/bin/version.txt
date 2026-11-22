@@ -1,2 +1,2 @@
-ARDMX EVO v2.1
-Generat: 2026-09-13
+ARDMX EVO v2.2
+Generat: 2026-11-22
